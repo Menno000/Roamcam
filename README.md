@@ -8,10 +8,11 @@ No account. No cloud. No crypto. It never phones home. Everything runs on the de
 
 > Made in the Netherlands 🇳🇱, for anyone who has one of these cameras sitting in a drawer.
 
-<!-- Drop a screenshot of your dashboard into docs/screenshots/dashboard.png and uncomment the next line:
-![The dashboard](docs/screenshots/dashboard.png)
--->
-> 📸 *Screenshots go here — see [docs/screenshots](docs/screenshots/) for what to capture.*
+### 🖥️ Try it without the hardware
+
+Open **[`demo.html`](demo.html)** in any browser (download it, or clone and double-click it) to click through the whole dashboard with sample data — every tab, live-updating, no device needed. It's the fastest way to see what you're getting.
+
+*Want static screenshots in this README? Grab them straight from `demo.html` (it uses a demo location, never your own) and drop them in [docs/screenshots](docs/screenshots/).*
 
 ---
 

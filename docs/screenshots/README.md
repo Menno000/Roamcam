@@ -1,12 +1,19 @@
 # Screenshots
 
-Drop your own screenshots here and reference them from the main README. A good set:
+The easiest **and safest** way to get screenshots: open [`../../demo.html`](../../demo.html) in your
+browser and capture each tab. The demo uses a **demo location (Amsterdam)** and fake device IDs, so a
+screenshot from it never reveals your real position or hardware.
 
-- `dashboard.png` — the **Live** tab (the hero image)
-- `playback.png` — the **Playback** clip list with the player open
-- `settings.png` — **Settings** showing the recorder + LED controls
+A good set:
+
+- `dashboard.png` — the **Live** tab (camera + IMU oscilloscope + GPS) — the hero image
+- `playback.png` — the **Playback** clip list
+- `settings.png` — **Settings** with the recorder + LED controls
 - `system.png` — the **System** tab
 
-Grab them from a phone or laptop with the dashboard open at `http://<device-ip>:8080`.
+Then reference them from the main README, e.g. `![Dashboard](docs/screenshots/dashboard.png)`.
 
-Keep them reasonably sized (a couple hundred KB each is plenty) so the repo stays light.
+Keep them reasonably sized (a couple hundred KB each) so the repo stays light.
+
+> If you screenshot your **real** device instead, avoid the **Live** tab (the GPS card and camera show
+> where you are) — or blur the GPS coordinates first.

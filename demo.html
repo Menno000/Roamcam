@@ -1,0 +1,548 @@
+<!doctype html><html lang="nl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HDC Dashboard</title>
+<style>
+:root{--bg:#0b0e14;--card:#141925;--card2:#1a2130;--bd:#232c3d;--tx:#e6edf3;--mut:#8b98ac;--acc:#4da3ff;--ok:#3fb950;--warn:#d29922;--err:#f85149;--mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;line-height:1.45}
+a{color:var(--acc)}
+.wrap{max-width:1400px;margin:0 auto;padding:16px}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;padding:14px 18px;background:linear-gradient(180deg,#161c2b,#111622);border:1px solid var(--bd);border-radius:14px;margin-bottom:16px}
+header h1{font-size:18px;margin:0;font-weight:700;letter-spacing:.2px}
+.badge{font-size:11px;font-weight:700;padding:3px 9px;border-radius:20px;background:#0d3a63;color:#9fd0ff;text-transform:uppercase;letter-spacing:.5px}
+.hstat{display:flex;flex-direction:column;line-height:1.2}
+.hstat b{font-size:13px}.hstat span{font-size:10px;color:var(--mut);text-transform:uppercase;letter-spacing:.4px}
+.dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:5px;vertical-align:middle}
+.dot.ok{background:var(--ok);box-shadow:0 0 6px var(--ok)}.dot.err{background:var(--err);box-shadow:0 0 6px var(--err)}
+.dot.warn{background:var(--warn)}.dot.dim{background:#39506e}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;align-items:start}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;overflow:hidden}
+.card.span2{grid-column:span 2}
+.card h2{margin:0;padding:11px 15px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--mut);border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;align-items:center}
+.card .body{padding:14px 15px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:5px 14px}
+.kv .k{color:var(--mut)}.kv .v{text-align:right;font-variant-numeric:tabular-nums}
+.mono{font-family:var(--mono);font-size:12.5px}
+.big{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
+.bar{height:8px;background:#0c1017;border-radius:6px;overflow:hidden;margin-top:5px}
+.bar>i{display:block;height:100%;background:linear-gradient(90deg,#2ea043,#3fb950)}
+.bar.hot>i{background:linear-gradient(90deg,#d29922,#f85149)}
+.frame{width:100%;display:block;background:#000;aspect-ratio:16/9;object-fit:cover}
+.pill{display:inline-block;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:700}
+.pill.g{background:#0f3d22;color:#4ade80}.pill.r{background:#3d1414;color:#f87171}.pill.y{background:#3d3110;color:#fbbf24}.pill.b{background:#10233d;color:#7cc4ff}
+.svcgrid{display:grid;grid-template-columns:1fr 1fr;gap:6px 14px}
+.svc{display:flex;align-items:center;gap:7px;font-size:12.5px}
+.dop{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;text-align:center}
+.dop div{background:var(--card2);border-radius:7px;padding:6px 2px}
+.dop b{display:block;font-size:14px;font-variant-numeric:tabular-nums}.dop span{font-size:9px;color:var(--mut);text-transform:uppercase}
+pre{margin:0;white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:11.5px;color:#b7c3d6;max-height:340px;overflow:auto}
+details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
+.muted{color:var(--mut)}
+.leds{display:flex;gap:18px}
+.led{text-align:center}.led .ring{width:26px;height:26px;border-radius:50%;margin:0 auto 4px;border:2px solid #263248}.led span{font-size:10px;color:var(--mut);text-transform:uppercase}
+.foot{color:var(--mut);font-size:11px;text-align:center;padding:14px}
+.err-line{color:var(--err);font-size:11px}
+.imugrid{display:grid;grid-template-columns:1fr 1fr 0.8fr;gap:18px}
+.acol .atitle{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--mut);margin-bottom:8px}
+.acol.center{text-align:center;border-left:1px solid var(--bd);padding-left:14px}
+.arow{display:flex;align-items:center;gap:8px;margin-bottom:7px;font-size:12px}
+.arow span{width:12px;color:var(--mut)}
+.arow b{width:56px;text-align:right;font-variant-numeric:tabular-nums;font-family:var(--mono);font-size:12px}
+.abar{flex:1;height:10px;background:#0c1017;border-radius:5px;position:relative;overflow:hidden}
+.abar::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:1px;background:#334155}
+.abar>i{position:absolute;top:0;bottom:0;left:50%;width:0;background:linear-gradient(90deg,#4dabf7,#74c0fc);border-radius:5px}
+.abar.g>i{background:linear-gradient(90deg,#b197fc,#d0bfff)}
+#imuCard.shock{animation:flash .4s}
+@keyframes flash{0%{background:#3d1414}100%{background:var(--card)}}
+.ledbtn{flex:1;padding:8px;border-radius:8px;border:1px solid var(--bd);background:var(--card2);color:var(--tx);cursor:pointer;font-size:12px}
+.ledbtn.on{background:#0d3a63;border-color:var(--acc);color:#9fd0ff}
+.ledsel{width:100%;padding:6px 8px;border-radius:7px;background:var(--card2);color:var(--tx);border:1px solid var(--bd);font-size:12px}
+.ledrow{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.ledrow>label{width:90px;color:var(--mut);font-size:12px}
+.tabbar{display:flex;gap:4px;margin-bottom:14px;background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:5px;overflow-x:auto}
+.tabbtn{flex:1;min-width:90px;padding:10px 12px;border:0;background:transparent;color:var(--mut);border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;white-space:nowrap}
+.tabbtn.on{background:#0d3a63;color:#9fd0ff}
+.card.hidden{display:none}
+.recdel{flex:1;background:#3d1414;color:#f87171;border:0;border-radius:5px;padding:4px;cursor:pointer;font-size:11px}
+.recdl{flex:1;text-align:center;background:#10233d;color:#7cc4ff;border-radius:5px;padding:4px;text-decoration:none;font-size:11px}
+.cliprow{display:flex;align-items:center;gap:12px;padding:9px 12px;border-bottom:1px solid var(--bd)}
+.cliprow:hover{background:var(--card2)}
+.cliprow:last-child{border-bottom:0}
+.clipmeta{flex:1;min-width:0;font-size:13px;font-variant-numeric:tabular-nums}
+.clipmeta b{font-family:var(--mono)}
+.clipbtns{display:flex;gap:6px;flex:none}
+.clipbtn{background:#182236;color:var(--tx);border:1px solid var(--bd);border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px;text-decoration:none;white-space:nowrap}
+.clipbtn.play{background:#0d3a63;color:#9fd0ff;border-color:#164a7a}
+.clipbtn.del{background:#3d1414;color:#f87171;border-color:#5a1c1c}
+@media(max-width:600px){.clipbtn{padding:5px 7px;font-size:11px}}
+.ledswatch{width:14px;height:14px;border-radius:50%;border:1px solid #3a465c;flex:none}
+@media(max-width:700px){.card.span2{grid-column:span 1}.imugrid{grid-template-columns:1fr}.acol.center{border-left:0;padding-left:0;border-top:1px solid var(--bd);padding-top:10px}}
+</style></head><body><div class="wrap">
+<header>
+  <span class="badge" id="dashcamType">HDC</span>
+  <h1 id="hostname">dashcam</h1>
+  <div class="hstat"><b id="healthDot"><span class="dot dim"></span><span id="healthTxt">…</span></b><span>status</span></div>
+  <div class="hstat"><b id="fw">–</b><span>firmware</span></div>
+  <div class="hstat"><b id="apiv">–</b><span>api</span></div>
+  <div class="hstat"><b id="uptime">–</b><span>uptime</span></div>
+  <div class="hstat"><b id="temp2">–</b><span>cpu temp</span></div>
+  <div class="hstat"><b id="clock">–</b><span>device tijd</span></div>
+  <div class="hstat" style="margin-left:auto"><b id="conn"><span class="dot ok"></span>live</b><span>poll 1.5s</span></div>
+</header>
+<nav class="tabbar">
+  <button class="tabbtn on" data-tab="live">Live</button>
+  <button class="tabbtn" data-tab="terug">Terugkijken</button>
+  <button class="tabbtn" data-tab="settings">Instellingen</button>
+  <button class="tabbtn" data-tab="sys">Systeem</button>
+</nav>
+<div class="grid">
+
+  <div class="card span2" id="imuCard"><h2>Live IMU / G-sensor
+      <span><span id="imuRate" class="muted" style="font-weight:400">– Hz</span> &nbsp;<span id="shockPill" class="pill g">rustig</span></span></h2>
+    <div class="body">
+      <canvas id="scope" height="150" style="width:100%;height:150px;background:#080b11;border-radius:8px;display:block"></canvas>
+      <div style="display:flex;gap:8px;font-size:11px;margin:6px 2px 12px" class="muted">
+        <span style="color:#ff6b6b">■ X</span><span style="color:#51cf66">■ Y</span><span style="color:#4dabf7">■ Z</span>
+        <span style="margin-left:auto">accelerometer (g) · laatste ~1,5 s</span>
+      </div>
+      <div class="imugrid">
+        <div class="acol">
+          <div class="atitle">Versnelling (g)</div>
+          <div class="arow"><span>X</span><div class="abar"><i id="axb"></i></div><b id="axv">–</b></div>
+          <div class="arow"><span>Y</span><div class="abar"><i id="ayb"></i></div><b id="ayv">–</b></div>
+          <div class="arow"><span>Z</span><div class="abar"><i id="azb"></i></div><b id="azv">–</b></div>
+        </div>
+        <div class="acol">
+          <div class="atitle">Rotatie (°/s)</div>
+          <div class="arow"><span>X</span><div class="abar g"><i id="gxb"></i></div><b id="gxv">–</b></div>
+          <div class="arow"><span>Y</span><div class="abar g"><i id="gyb"></i></div><b id="gyv">–</b></div>
+          <div class="arow"><span>Z</span><div class="abar g"><i id="gzb"></i></div><b id="gzv">–</b></div>
+        </div>
+        <div class="acol center">
+          <div class="atitle">G-kracht</div>
+          <div class="big" id="gforce">–</div>
+          <div class="muted" style="font-size:11px">piek <b id="gpeak" style="color:var(--warn)">–</b> · <span id="gpeakReset" style="cursor:pointer;color:var(--acc)">reset</span></div>
+          <div class="atitle" style="margin-top:12px">Stand</div>
+          <div class="mono" id="tilt">–</div>
+          <div class="muted" style="font-size:11px">chip <b id="imuTemp">–</b></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card span2"><h2>Live camera <span id="frameInfo" class="muted"></span></h2>
+    <img class="frame" id="frame" alt="camera" src="/frame.jpg">
+    <div class="body kv">
+      <div class="k">Laatste frame</div><div class="v mono" id="frameTs">–</div>
+      <div class="k">Frames in buffer</div><div class="v" id="frameCount">–</div>
+      <div class="k">Resolutie (config)</div><div class="v" id="res">–</div>
+    </div>
+  </div>
+
+  <div class="card span2" style="display:none"><h2>Opnames <span id="recCount" class="muted" style="font-weight:400"></span></h2><div class="body">
+    <div class="muted" style="font-size:12px;margin-bottom:10px">De meest recente camerabeelden. Losse video-clips verschijnen hier zodra we de eigen recorder bouwen.</div>
+    <div style="display:flex;gap:8px;margin-bottom:10px"><button class="ledbtn" id="recRefresh" style="flex:none;padding:6px 12px">Vernieuwen</button></div>
+    <div id="recGallery" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px"></div>
+  </div></div>
+
+  <div class="card span2"><h2>Video-opnames <span id="clipCount" class="muted" style="font-weight:400"></span></h2><div class="body">
+    <div id="clipPlayer" style="display:none;margin-bottom:12px">
+      <video id="clipVideo" controls autoplay playsinline style="width:100%;max-height:52vh;background:#000;border-radius:8px;display:block"></video>
+      <div class="muted" id="clipNow" style="font-size:11px;margin-top:4px"></div>
+    </div>
+    <div id="clipGallery"></div>
+  </div></div>
+
+  <div class="card"><h2>Opname-recorder <span id="recPill" class="pill b">–</span></h2><div class="body">
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <button class="ledbtn" id="recStart">Start opname</button>
+      <button class="ledbtn" id="recStop">Camera uit</button>
+    </div>
+    <div id="recErr" class="err-line" style="margin-bottom:8px;display:none"></div>
+    <div class="kv">
+      <div class="k">Status</div><div class="v" id="recStat">–</div>
+      <div class="k">Clips</div><div class="v" id="recClips">–</div>
+      <div class="k">Segmentduur</div><div class="v"><select class="ledsel" id="recSeg" style="width:auto"><option value="30">30 s</option><option value="60">1 min</option><option value="180">3 min</option><option value="300">5 min</option></select></div>
+      <div class="k">Bewaarlimiet</div><div class="v"><select class="ledsel" id="recCap" style="width:auto"><option value="5">5 GB</option><option value="10">10 GB</option><option value="15">15 GB</option><option value="20">20 GB</option></select></div>
+    </div>
+    <div class="muted" style="font-size:11px;margin-top:10px">Standalone dashcam-modus: neemt op naar /mnt/data/clips (1080p30, hardware-H.264), oudste clips worden gewist boven de limiet, GPS + beweging meegelogd. "Camera uit" stopt de opname maar blijft standalone. Overleeft een reboot — werkt in de auto vanzelf zodra hij stroom krijgt.</div>
+    <div style="margin-top:6px"><a id="recHive" style="font-size:11px;color:var(--mut);cursor:pointer">↩ Hivemapper-camera herstellen</a></div>
+  </div></div>
+
+  <div class="card"><h2>LED-bediening <span id="ledModeState" class="pill b">–</span></h2><div class="body">
+    <div style="display:flex;gap:8px;margin-bottom:14px">
+      <button class="ledbtn" id="ledDashcam">Dashcam-status</button>
+      <button class="ledbtn" id="ledSelf">Zelf instellen</button>
+    </div>
+    <div class="ledrow"><label>LED boven</label><span class="ledswatch" id="sw0"></span><select class="ledsel" id="ledfn0"></select></div>
+    <div class="ledrow"><label>LED midden</label><span class="ledswatch" id="sw1"></span><select class="ledsel" id="ledfn1"></select></div>
+    <div class="ledrow"><label>LED onder</label><span class="ledswatch" id="sw2"></span><select class="ledsel" id="ledfn2"></select></div>
+    <div class="muted" style="font-size:11px;margin-top:8px">Bij "zelf instellen" stuurt het dashboard de LEDs aan (blijft stabiel, ook na een API-herstart). GPS-fix / beweging / temp / snelheid updaten live mee.</div>
+  </div></div>
+
+  <div class="card"><h2>GPS / GNSS <span id="fixPill" class="pill b">–</span></h2><div class="body">
+    <div class="kv">
+      <div class="k">Latitude</div><div class="v mono" id="lat">–</div>
+      <div class="k">Longitude</div><div class="v mono" id="lon">–</div>
+      <div class="k">Satellieten</div><div class="v" id="sats">–</div>
+      <div class="k">Snelheid</div><div class="v" id="speed">–</div>
+      <div class="k">Koers</div><div class="v" id="heading">–</div>
+      <div class="k">Hoogte</div><div class="v" id="alt">–</div>
+      <div class="k">Nauwkeurigh. (H/V)</div><div class="v" id="acc">–</div>
+      <div class="k">TTFF</div><div class="v" id="ttff">–</div>
+    </div>
+    <div style="margin:10px 0 6px" class="muted" id="mapLink"></div>
+    <div class="dop" id="dop"></div>
+    <details><summary>Ruwe NMEA (GGA)</summary><pre id="gga">–</pre></details>
+  </div></div>
+
+  <div class="card"><h2>GNSS RF / anti-jamming</h2><div class="body kv">
+    <div class="k">Jamming-status</div><div class="v" id="jam">–</div>
+    <div class="k">Jam-indicator</div><div class="v" id="jamind">–</div>
+    <div class="k">Antenne</div><div class="v" id="ant">–</div>
+    <div class="k">Antenne-voeding</div><div class="v" id="antpwr">–</div>
+    <div class="k">Ruis / ms</div><div class="v" id="noise">–</div>
+    <div class="k">AGC</div><div class="v" id="agc">–</div>
+    <div class="k">C/No</div><div class="v" id="cno">–</div>
+    <div class="k">Spoof-detectie</div><div class="v" id="spoof">–</div>
+  </div></div>
+
+  <div class="card"><h2>Systeem</h2><div class="body">
+    <div><div class="k muted">CPU-gebruik <span style="float:right" id="cpuAll">–</span></div><div class="bar" id="cpuAllWrap"><i id="cpuAllBar"></i></div></div>
+    <div id="cores" style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:8px 0 4px"></div>
+    <div class="kv" style="margin-top:8px">
+      <div class="k">CPU-temp</div><div class="v" id="temp">–</div>
+      <div class="k">CPU-klok / gov.</div><div class="v" id="mhz">–</div>
+      <div class="k">Load (1/5/15m)</div><div class="v mono" id="load">–</div>
+      <div class="k">Cores / processen</div><div class="v" id="cpuproc">–</div>
+    </div>
+    <div style="margin-top:10px"><div class="k muted">Geheugen <span id="memTxt" style="float:right"></span></div><div class="bar" id="memBarWrap"><i id="memBar"></i></div></div>
+    <div style="margin-top:8px"><div class="k muted">Swap <span id="swapTxt" style="float:right"></span></div><div class="bar"><i id="swapBar"></i></div></div>
+  </div></div>
+
+  <div class="card"><h2>Opslag</h2><div class="body" id="disks"></div></div>
+
+  <div class="card"><h2>Services</h2><div class="body"><div class="svcgrid" id="svc"></div></div></div>
+
+  <div class="card"><h2>Status-LEDs</h2><div class="body">
+    <div class="leds" id="leds"></div>
+    <div class="kv" style="margin-top:12px">
+      <div class="k">Sessie-ID</div><div class="v mono" id="session">–</div>
+      <div class="k">Serienr.</div><div class="v mono" id="serial">–</div>
+      <div class="k">Board</div><div class="v mono" id="board">–</div>
+      <div class="k">Device-ID</div><div class="v mono" id="devid">–</div>
+      <div class="k">SSID</div><div class="v mono" id="ssid">–</div>
+    </div>
+  </div></div>
+
+  <div class="card"><h2>Netwerk</h2><div class="body">
+    <div class="kv"><div class="k">IP-adres(sen)</div><div class="v mono" id="ips">–</div>
+    <div class="k">WiFi-modus</div><div class="v" id="wifimode">–</div></div>
+    <div id="nets" style="margin-top:8px"></div>
+  </div></div>
+
+  <div class="card"><h2>Data & opnames</h2><div class="body kv" id="datacounts">
+    <div class="k">FrameKM buffer</div><div class="v" id="fkm">–</div>
+    <div class="k">GPS-logs</div><div class="v" id="gpslogs">–</div>
+    <div class="k">IMU-logs</div><div class="v" id="imulogs">–</div>
+  </div><div class="body" style="border-top:1px solid var(--bd)" id="dbs"></div></div>
+
+  <div class="card"><h2>Firmware-slots (RAUC)</h2><div class="body"><pre id="rauc">–</pre></div></div>
+
+  <div class="card span2"><h2>Volledige configuratie</h2><div class="body">
+    <details open><summary id="cfgSummary">Alle instellingen</summary><pre id="config">–</pre></details>
+  </div></div>
+
+</div>
+<div class="foot" id="foot">Hivemapper HDC lokaal dashboard &middot; data van API :5000 + systeem</div>
+</div>
+<script>
+/* ===== DEMO MODE — synthetic data only. No real device, no real location. ===== */
+const SVG_FRAME="<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1920 1080'><defs><linearGradient id='s' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='#2b3a5c'/><stop offset='.6' stop-color='#7186a8'/><stop offset='1' stop-color='#cbb891'/></linearGradient></defs><rect width='1920' height='560' fill='url(#s)'/><rect y='540' width='1920' height='540' fill='#39493e'/><rect x='0' y='474' width='720' height='80' fill='#334539'/><rect x='1230' y='474' width='690' height='80' fill='#334539'/><polygon points='770,540 1150,540 1620,1080 300,1080' fill='#2b2e35'/><polygon points='772,545 782,545 360,1080 320,1080' fill='#cbc4ae' opacity='.55'/><polygon points='1148,545 1138,545 1560,1080 1600,1080' fill='#cbc4ae' opacity='.55'/><g fill='#ded7c3'><polygon points='956,558 964,558 967,596 953,596'/><polygon points='950,648 970,648 975,716 945,716'/><polygon points='942,776 978,776 986,874 934,874'/><polygon points='930,936 990,936 1000,1080 920,1080'/></g></svg>";
+const DEMO_FRAME='data:image/svg+xml;base64,'+btoa(SVG_FRAME);
+const _clips=[
+ {name:'20260725_141200.mp4',size:24800000,mtime:Date.UTC(2026,6,25,14,12,0)},
+ {name:'20260725_141100.mp4',size:29100000,mtime:Date.UTC(2026,6,25,14,11,0)},
+ {name:'20260725_141000.mp4',size:27400000,mtime:Date.UTC(2026,6,25,14,10,0)},
+ {name:'20260725_140900.mp4',size:26900000,mtime:Date.UTC(2026,6,25,14,9,0)},
+ {name:'20260725_140800.mp4',size:28200000,mtime:Date.UTC(2026,6,25,14,8,0)},
+ {name:'20260725_140700.mp4',size:25600000,mtime:Date.UTC(2026,6,25,14,7,0)},
+ {name:'20260725_140600.mp4',size:30100000,mtime:Date.UTC(2026,6,25,14,6,0)},
+ {name:'20260725_140500.mp4',size:23800000,mtime:Date.UTC(2026,6,25,14,5,0)}
+];
+const _hist=Array.from({length:60},(_,i)=>({ax:0.05*Math.sin(i/3.5)+0.02*Math.sin(i/1.6),ay:0.035*Math.cos(i/4.2),az:-0.99+0.03*Math.sin(i/6),gx:0,gy:0,gz:0,g:0.99}));
+const MOCK={
+ '/api/1/info':{version:'0.23',api_version:'4.9.16',ssid:'a1b2c3',deviceId:'demo1234',dashcam:'hdc',serial:'DEMO0000',boardConfig:'B1D0UFL4L__'},
+ '/api/1/ping':{healthy:true,leds:{framesLED:'GREEN',gpsLED:'GREEN',appLED:'GREEN'},dashcam:'hdc',sessionId:'demoSession',lockTime:0,ssid:'a1b2c3',boardConfig:'B1D0UFL4L__',serial:'DEMO0000'},
+ '/api/1/gps/sample':{fix:'3D',latitude:52.3730,longitude:4.8924,height:12.4,heading:74,speed:13.1,dop:{hdop:0.8,vdop:1.1,pdop:1.4,gdop:1.9,xdop:0.7,ydop:0.6,tdop:1.0},satellites:{seen:18,used:12},eph:1.2,horizontal_accuracy:1.2,vertical_accuracy:2.1,heading_accuracy:2.4,ttff:26000,cno:44,rf:{jamming_state:'ok',ant_status:'ok',ant_power:'on',noise_per_ms:42,agc_cnt:2100,jam_ind:8},gga:'$GNGGA,141200.00,5222.380,N,00453.544,E,1,12,0.8,12.4,M,45.0,M,,*5C'},
+ '/api/1/recordings':[],
+ '/api/1/gps':new Array(842),
+ '/api/1/imu':new Array(5120),
+ '/api/1/framekm/total':{bytes:0},
+ '/api/1/config':{resolution:'2k',isDashcamMLEnabled:true,isTripTrimmingEnabled:true,FrameKmLengthMeters:1000,privacyRadius:200,distanceBetweenFrames:4,GnssFilter:{'3dLock':true,minSatellites:4,hdop:4}},
+ '/sys.json':{hostname:'dashcam-demo',model:'Raspberry Pi Compute Module 4 Rev 1.1',kernel:'Linux dashcam-demo 5.10.76-v8 aarch64',uptime_s:8640,loadavg:'0.42 0.51 0.48 2/187 900',cpu_count:4,temp_c:52.4,cpu_mhz:1500,governor:'ondemand',cpu:{cpu:23.5,cpu0:18,cpu1:21,cpu2:15,cpu3:41},mem_total:1914000000,mem_avail:1180000000,mem_used:734000000,swap_total:1073000000,swap_free:1073000000,disks:{'root /':{total:957000000,used:210000,free:956790000},'firmware /ro':{total:212000000,used:212000000,free:0},'data /mnt/data':{total:27800000000,used:3100000000,free:24700000000}},procs:112,services:{'api-health-manager':'active','camera-node':'active','object-detection':'inactive','data-logger':'active','folder_purger':'active','lorawan-logger':'active','led-controller':'active','sshd':'active','hostapd':'active','dnsmasq':'active','rauc':'active'},ips:['192.168.4.1'],nets:{wlan0:{state:'up',mac:'b8:27:eb:00:11:22'}},wifi_mode:'AP',rauc:'[slot.rootfs.0]\nstatus=ok\nbundle.version=4.9.16\ninstalled.count=10',dbs:[{name:'data-logger.v1.4.5.db',size:59000000},{name:'gnss.v1.1.1.db',size:65600000}]},
+ '/imu.json':{ok:true,accel:{x:0.02,y:-0.05,z:-0.99},gyro:{x:1.2,y:-0.6,z:0.3},temp:41.5,g:0.995,pitch:-2.9,roll:178.6,peak_g:1.02,peak_gyro:12,rate:42,hist:_hist},
+ '/led/state':{mode:'dashboard',fns:['gps','opname','temp'],raw:null},
+ '/rec/status':{on:true,running:true,standalone:true,err:'',seg:60,cap_gb:15,w:1920,h:1080,fps:30,gain:0,shutter:0,clips:_clips.length,bytes:_clips.reduce((a,c)=>a+c.size,0)}
+};
+MOCK['/clips.json']=_clips;
+function _mock(u){const p=u.split('?')[0];return (p in MOCK)?MOCK[p]:{ok:true,done:true};}
+window.fetch=async(u)=>({ok:true,status:200,json:async()=>_mock(u),text:async()=>JSON.stringify(_mock(u))});
+/* ============================================================================= */
+const $=id=>document.getElementById(id);
+const fmtBytes=b=>{if(b==null)return'–';const u=['B','KB','MB','GB','TB'];let i=0;b=+b;while(b>=1024&&i<u.length-1){b/=1024;i++}return b.toFixed(b<10&&i>0?1:0)+' '+u[i]};
+const fmtDur=s=>{s=Math.floor(s);const d=Math.floor(s/86400);s%=86400;const h=Math.floor(s/3600);s%=3600;const m=Math.floor(s/60);return(d?d+'d ':'')+h+'u '+m+'m'};
+async function jget(u){const r=await fetch(u,{cache:'no-store'});if(!r.ok)throw new Error(r.status);return r.json()}
+
+async function tick(){
+  try{
+    const [info,ping,gps,rec]=await Promise.all([
+      jget('/api/1/info').catch(()=>({})),
+      jget('/api/1/ping').catch(()=>({})),
+      jget('/api/1/gps/sample').catch(()=>({})),
+      jget('/api/1/recordings').catch(()=>[])
+    ]);
+    // header / info
+    $('hostname').textContent=info.ssid?('dashcam-'+info.ssid):(ping.ssid?'dashcam-'+ping.ssid:'dashcam');
+    $('dashcamType').textContent=(info.dashcam||ping.dashcam||'hdc').toUpperCase();
+    $('fw').textContent=info.api_version||'–';
+    $('apiv').textContent=info.api_version||'–';
+    const healthy=ping.healthy;
+    $('healthDot').innerHTML='<span class="dot '+(healthy?'ok':'err')+'"></span>'+(healthy?'gezond':'probleem');
+    // ping-details
+    $('session').textContent=ping.sessionId||'–';
+    $('serial').textContent=(ping.serial||'').replace(/_+$/,'')||'–';
+    $('board').textContent=ping.boardConfig||'–';
+    $('devid').textContent=info.deviceId||'–';
+    $('ssid').textContent=info.ssid||ping.ssid||'–';
+    // leds
+    if(ping.leds){const col={GREEN:'#3fb950',RED:'#f85149',DIM:'#39506e',OFF:'#39506e',YELLOW:'#d29922',AMBER:'#d29922'};
+      $('leds').innerHTML=Object.entries(ping.leds).map(([k,v])=>
+        '<div class="led"><div class="ring" style="background:'+(col[v]||'#39506e')+';border-color:'+(col[v]||'#263248')+'"></div><span>'+k.replace('LED','')+'</span></div>').join('');}
+    // gps
+    const fix=(gps.fix||'none');
+    const fp=$('fixPill');fp.textContent=fix==='none'?'geen fix':fix;
+    fp.className='pill '+(fix==='3D'?'g':fix==='2D'?'y':'r');
+    $('lat').textContent=gps.latitude!=null?gps.latitude.toFixed(7):'–';
+    $('lon').textContent=gps.longitude!=null?gps.longitude.toFixed(7):'–';
+    if(gps.satellites)$('sats').textContent=(gps.satellites.used??'?')+' gebruikt / '+(gps.satellites.seen??'?')+' zichtbaar';
+    $('speed').textContent=gps.speed!=null?(gps.speed*3.6).toFixed(1)+' km/u':'–';
+    $('heading').textContent=gps.heading!=null?gps.heading.toFixed(0)+'°':'–';
+    $('alt').textContent=gps.height!=null?gps.height.toFixed(0)+' m':'–';
+    $('acc').textContent=(gps.horizontal_accuracy!=null?gps.horizontal_accuracy.toFixed(1):'?')+' / '+(gps.vertical_accuracy!=null?gps.vertical_accuracy.toFixed(1):'?')+' m';
+    $('ttff').textContent=(gps.ttff&&gps.ttff<1e12)?(gps.ttff/1000).toFixed(0)+' s':'geen';
+    if(gps.latitude&&gps.longitude&&fix!=='none')
+      $('mapLink').innerHTML='📍 <a href="https://www.openstreetmap.org/?mlat='+gps.latitude+'&mlon='+gps.longitude+'#map=17/'+gps.latitude+'/'+gps.longitude+'" target="_blank">Toon op kaart</a>';
+    else $('mapLink').innerHTML='<span class="muted">geen positie-fix (binnen / weinig zicht)</span>';
+    if(gps.dop)$('dop').innerHTML=['hdop','vdop','pdop','gdop'].map(k=>'<div><b>'+(gps.dop[k]>=99?'∞':gps.dop[k].toFixed(1))+'</b><span>'+k+'</span></div>').join('');
+    $('gga').textContent=gps.gga||'–';
+    // rf
+    const rf=gps.rf||{};
+    $('jam').textContent=rf.jamming_state||'–';
+    $('jamind').textContent=rf.jam_ind!=null?rf.jam_ind:'–';
+    $('ant').textContent=rf.ant_status||'–';
+    $('antpwr').textContent=rf.ant_power||'–';
+    $('noise').textContent=rf.noise_per_ms!=null?rf.noise_per_ms:'–';
+    $('agc').textContent=rf.agc_cnt!=null?rf.agc_cnt:'–';
+    $('cno').textContent=gps.cno!=null?gps.cno.toFixed(0)+' dBHz':'–';
+    $('spoof').textContent=(gps.spoof_state||'ok');
+    // frames
+    $('frameCount').textContent=Array.isArray(rec)?rec.length:'–';
+    if(Array.isArray(rec)&&rec.length){const last=rec[rec.length-1];$('frameTs').textContent=new Date(last.date).toLocaleTimeString('nl-NL');}
+    $('conn').innerHTML='<span class="dot ok"></span>live';
+  }catch(e){$('conn').innerHTML='<span class="dot err"></span>offline';}
+}
+
+async function tickFrame(){$('frame').src=DEMO_FRAME;}
+
+async function tickSys(){
+  try{
+    const s=await jget('/sys.json');
+    $('uptime').textContent=fmtDur(s.uptime_s);
+    $('temp').textContent=$('temp2').textContent=(s.temp_c!=null?s.temp_c+' °C':'–');
+    $('mhz').textContent=(s.cpu_mhz?s.cpu_mhz+' MHz':'–')+(s.governor?' · '+s.governor:'');
+    // CPU-gebruik totaal + per core
+    if(s.cpu){const all=s.cpu.cpu;if(all!=null){$('cpuAll').textContent=all+' %';$('cpuAllBar').style.width=all+'%';$('cpuAllWrap').className='bar'+(all>85?' hot':'');}
+      const cores=Object.keys(s.cpu).filter(k=>k!=='cpu').sort();
+      $('cores').innerHTML=cores.map(k=>{const v=s.cpu[k];return '<div style="text-align:center"><div class="bar" style="height:34px;display:flex;align-items:flex-end"><i style="width:100%;height:'+v+'%;align-self:flex-end"></i></div><span class="muted" style="font-size:9px">'+k.replace('cpu','C')+' '+Math.round(v)+'%</span></div>';}).join('');}
+    $('load').textContent=(s.loadavg||'').split(' ').slice(0,3).join('  ');
+    $('cpuproc').textContent=(s.cpu_count||'?')+' cores · '+(s.procs||'?')+' procs';
+    // mem
+    if(s.mem_total){const p=100*s.mem_used/s.mem_total;$('memBar').style.width=p+'%';$('memBarWrap').className='bar'+(p>85?' hot':'');
+      $('memTxt').textContent=fmtBytes(s.mem_used)+' / '+fmtBytes(s.mem_total);}
+    if(s.swap_total){const su=s.swap_total-s.swap_free;$('swapBar').style.width=(100*su/s.swap_total)+'%';$('swapTxt').textContent=fmtBytes(su)+' / '+fmtBytes(s.swap_total);}
+    else $('swapTxt').textContent='—';
+    // disks
+    $('disks').innerHTML=Object.entries(s.disks||{}).map(([k,v])=>{const p=100*v.used/v.total;
+      return '<div style="margin-bottom:10px"><div class="k muted">'+k+' <span style="float:right">'+fmtBytes(v.used)+' / '+fmtBytes(v.total)+'</span></div><div class="bar'+(p>90?' hot':'')+'"><i style="width:'+p+'%"></i></div></div>';}).join('');
+    // services
+    $('svc').innerHTML=Object.entries(s.services||{}).map(([k,v])=>{const ok=v==='active';
+      return '<div class="svc"><span class="dot '+(ok?'ok':(v==='inactive'?'dim':'err'))+'"></span>'+k+' <span class="muted" style="margin-left:auto;font-size:11px">'+v+'</span></div>';}).join('');
+    // netwerk
+    $('ips').textContent=(s.ips||[]).join(', ')||'–';
+    $('wifimode').textContent=(s.wifi_mode||'').startsWith('AP')?'Access Point':(s.wifi_mode||'–');
+    $('nets').innerHTML=Object.entries(s.nets||{}).map(([k,v])=>
+      '<div class="svc"><span class="dot '+(v.state==='up'?'ok':'dim')+'"></span>'+k+' <span class="muted mono" style="margin-left:auto;font-size:11px">'+(v.mac||'')+' · '+v.state+'</span></div>').join('');
+    // dbs
+    $('dbs').innerHTML='<div class="k muted" style="margin-bottom:6px">Databases</div>'+(s.dbs||[]).map(d=>
+      '<div class="svc mono" style="font-size:11.5px">'+d.name+'<span class="muted" style="margin-left:auto">'+fmtBytes(d.size)+'</span></div>').join('');
+    // rauc
+    $('rauc').textContent=s.rauc||'–';
+  }catch(e){}
+}
+
+async function tickSlow(){
+  try{
+    const [cfg,gpsL,imuL,fkm]=await Promise.all([
+      jget('/api/1/config').catch(()=>({})),
+      jget('/api/1/gps').catch(()=>[]),
+      jget('/api/1/imu').catch(()=>[]),
+      jget('/api/1/framekm/total').catch(()=>({}))
+    ]);
+    $('res').textContent=cfg.resolution||'–';
+    $('config').textContent=JSON.stringify(cfg,null,2);
+    $('cfgSummary').textContent='Alle instellingen ('+Object.keys(cfg).length+' sleutels)';
+    $('gpslogs').textContent=Array.isArray(gpsL)?gpsL.length+' bestanden':'–';
+    $('imulogs').textContent=Array.isArray(imuL)?imuL.length+' bestanden':'–';
+    $('fkm').textContent=fkm.bytes!=null?fmtBytes(fkm.bytes):'–';
+  }catch(e){}
+}
+
+// ---- Live IMU / G-sensor ----
+let gPeakHold=0;
+$('gpeakReset').onclick=()=>{gPeakHold=0;};
+const scope=$('scope'),sctx=scope.getContext('2d');
+function drawScope(hist){
+  const w=scope.width=scope.clientWidth*devicePixelRatio, h=scope.height=150*devicePixelRatio;
+  sctx.clearRect(0,0,w,h);
+  // nul-lijn
+  sctx.strokeStyle='#1c2432';sctx.lineWidth=1;
+  sctx.beginPath();sctx.moveTo(0,h/2);sctx.lineTo(w,h/2);sctx.stroke();
+  if(!hist||!hist.length)return;
+  const range=2.0; // ±2g op volle hoogte
+  const map=v=>h/2-(v/range)*(h/2*0.9);
+  const axes=[['ax','#ff6b6b'],['ay','#51cf66'],['az','#4dabf7']];
+  for(const [k,col] of axes){
+    sctx.strokeStyle=col;sctx.lineWidth=1.5*devicePixelRatio;sctx.beginPath();
+    hist.forEach((p,i)=>{const x=i/(hist.length-1)*w,y=map(p[k]);i?sctx.lineTo(x,y):sctx.moveTo(x,y);});
+    sctx.stroke();
+  }
+}
+async function tickImu(){
+  try{
+    const d=await jget('/imu.json');
+    if(!d.ok)return;
+    $('imuRate').textContent=(d.rate||'–')+' Hz';
+    const a=d.accel,g=d.gyro;
+    const setBar=(bid,vid,val,scale,dec)=>{const pct=Math.max(-1,Math.min(1,val/scale));
+      const el=$(bid);el.style.width=Math.abs(pct)*50+'%';el.style.left=pct>=0?'50%':(50+pct*50)+'%';
+      $(vid).textContent=val.toFixed(dec);};
+    setBar('axb','axv',a.x,2,3);setBar('ayb','ayv',a.y,2,3);setBar('azb','azv',a.z,2,3);
+    setBar('gxb','gxv',g.x,250,1);setBar('gyb','gyv',g.y,250,1);setBar('gzb','gzv',g.z,250,1);
+    $('gforce').textContent=d.g.toFixed(3)+' g';
+    if(d.peak_g>gPeakHold)gPeakHold=d.peak_g;
+    $('gpeak').textContent=gPeakHold.toFixed(2)+' g';
+    $('tilt').textContent='pitch '+d.pitch.toFixed(1)+'°  roll '+d.roll.toFixed(1)+'°';
+    $('imuTemp').textContent=(d.temp!=null?d.temp.toFixed(1)+' °C':'–');
+    // schok-detectie: afwijking van 1g of hoge rotatie
+    const dev=Math.abs(d.peak_g-1);
+    const shock=dev>0.35||d.peak_gyro>60;
+    const sp=$('shockPill');
+    if(shock){sp.textContent='BEWEGING!';sp.className='pill r';$('imuCard').classList.remove('shock');void $('imuCard').offsetWidth;$('imuCard').classList.add('shock');}
+    else{sp.textContent='rustig';sp.className='pill g';}
+    drawScope(d.hist);
+  }catch(e){}
+}
+
+// ---- LED-bediening ----
+const LED_FNS=[['uit','Uit'],['opname','Opname (ademend rood)'],['gps','GPS-fix (groen=3D)'],['beweging','Beweging / schok'],['temp','CPU-temp'],['snelheid','Snelheid'],['rood','Vaste kleur: rood'],['groen','Vaste kleur: groen'],['blauw','Vaste kleur: blauw'],['geel','Vaste kleur: geel'],['wit','Vaste kleur: wit'],['paars','Vaste kleur: paars']];
+const LED_SW={uit:'#222',opname:'#ff4d4d',rood:'#ff4d4d',groen:'#3fb950',blauw:'#4dabf7',geel:'#f5d90a',wit:'#eee',paars:'#b197fc',gps:'#3fb950',beweging:'#ff4d4d',temp:'#f5d90a',snelheid:'#4dabf7'};
+function fillLedSelects(){
+  for(let i=0;i<3;i++){const s=$('ledfn'+i);s.innerHTML=LED_FNS.map(([v,t])=>'<option value="'+v+'">'+t+'</option>').join('');
+    s.onchange=()=>{$('sw'+i).style.background=LED_SW[s.value]||'#222';fetch('/led/fn?i='+i+'&fn='+encodeURIComponent(s.value)).then(loadLedState);};}
+  $('ledDashcam').onclick=()=>fetch('/led/mode?set=dashcam').then(loadLedState);
+  $('ledSelf').onclick=()=>fetch('/led/mode?set=dashboard').then(loadLedState);
+}
+async function loadLedState(){try{const d=await jget('/led/state');
+  const self=d.mode==='dashboard';
+  $('ledModeState').textContent=self?'zelf':'dashcam-status';$('ledModeState').className='pill '+(self?'g':'b');
+  $('ledDashcam').className='ledbtn'+(!self?' on':'');$('ledSelf').className='ledbtn'+(self?' on':'');
+  for(let i=0;i<3;i++){const v=(d.fns&&d.fns[i])||'uit';$('ledfn'+i).value=v;$('sw'+i).style.background=LED_SW[v]||'#222';}
+}catch(e){}}
+
+// ---- Tabbladen ----
+const TABMAP={'Systeem':'sys','Opslag':'sys','Services':'sys','Status-LEDs':'sys','Netwerk':'sys','Data & opnames':'sys','Firmware-slots':'sys','Volledige configuratie':'sys','LED-bediening':'settings','Opname-recorder':'settings','Opnames':'terug','Video-opnames':'terug'};
+function assignTabs(){document.querySelectorAll('.card').forEach(c=>{const h=c.querySelector('h2');const t=h?h.textContent.trim():'';let tab='live';for(const k in TABMAP){if(t.indexOf(k)===0){tab=TABMAP[k];break;}}c.dataset.tab=tab;});}
+function showTab(tab){document.querySelectorAll('.card').forEach(c=>c.classList.toggle('hidden',(c.dataset.tab||'live')!==tab));
+  document.querySelectorAll('.tabbtn').forEach(b=>b.classList.toggle('on',b.dataset.tab===tab));
+  if(tab==='terug'){loadRecordings();loadClips();}
+  if(tab==='settings'){loadRec();loadLedState();}}
+document.querySelectorAll('.tabbtn').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
+
+// ---- Recorder ----
+async function loadRec(){try{const d=await jget('/rec/status');const run=d.running;
+  $('recPill').textContent=run?'opname loopt':(d.standalone?'camera uit':'Hivemapper');
+  $('recPill').className='pill '+(run?'g':(d.standalone?'y':'b'));
+  $('recStat').textContent=run?('opnemen '+d.w+'×'+d.h+' @'+d.fps):(d.standalone?'standalone, opname uit':'Hivemapper actief');
+  $('recClips').textContent=d.clips+' clips · '+fmtBytes(d.bytes);
+  $('recStart').className='ledbtn'+(run?' on':'');$('recStop').className='ledbtn'+(!run&&d.standalone?' on':'');
+  if(d.err){$('recErr').style.display='block';$('recErr').textContent='⚠ '+d.err;}else{$('recErr').style.display='none';}
+  if($('recSeg').dataset.init!=='1'){$('recSeg').value=d.seg;$('recCap').value=d.cap_gb;$('recSeg').dataset.init='1';}
+}catch(e){}}
+$('recStart').onclick=async()=>{$('recStat').textContent='camera vrijmaken…';await fetch('/rec/start');setTimeout(loadRec,8000);};
+$('recStop').onclick=async()=>{$('recStat').textContent='opname stoppen…';await fetch('/rec/stop');setTimeout(loadRec,2500);};
+$('recHive').onclick=async()=>{if(!confirm('Hivemapper-camera herstellen (standalone verlaten)?'))return;$('recStat').textContent='herstellen…';await fetch('/rec/hivemapper');setTimeout(loadRec,3000);};
+$('recSeg').onchange=()=>fetch('/rec/set?seg='+$('recSeg').value);
+$('recCap').onchange=()=>fetch('/rec/set?cap_gb='+$('recCap').value);
+
+// ---- Video-clips ----
+function playClip(n,label){const v=$('clipVideo');v.pause();v.innerHTML='';v.removeAttribute('src');
+  v.src='/clip?name='+encodeURIComponent(n);
+  const tr=document.createElement('track');tr.kind='subtitles';tr.label='GPS';tr.srclang='nl';tr.default=true;tr.src='/clipvtt?name='+encodeURIComponent(n);v.appendChild(tr);
+  const showSubs=()=>{try{if(v.textTracks&&v.textTracks[0])v.textTracks[0].mode='showing';}catch(e){}};
+  v.addEventListener('loadeddata',showSubs,{once:true});
+  v.load();v.play().then(showSubs).catch(()=>{});
+  $('clipPlayer').style.display='block';$('clipNow').textContent='▶ '+(label||n)+'  ·  GPS-overlay aan (CC-knop = aan/uit)';
+  $('clipPlayer').scrollIntoView({behavior:'smooth',block:'nearest'});}
+async function loadClips(){try{const list=await jget('/clips.json');
+  const tot=list.reduce((a,c)=>a+(c.size||0),0);
+  $('clipCount').textContent=(list.length||0)+' clips · '+fmtBytes(tot);
+  if(!list.length){$('clipGallery').innerHTML='<span class="muted">nog geen video-clips — start de opname in Instellingen</span>';return;}
+  $('clipGallery').innerHTML=list.map(c=>{const dt=new Date(c.mtime);
+    const d=dt.toLocaleDateString('nl-NL',{weekday:'short',day:'2-digit',month:'short'});
+    const t=dt.toLocaleTimeString('nl-NL',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    const lbl=d+' '+t;
+    return '<div class="cliprow">'+
+      '<div class="clipmeta"><b>'+t+'</b> <span class="muted">· '+d+' · '+fmtBytes(c.size)+'</span></div>'+
+      '<div class="clipbtns">'+
+      '<button class="clipbtn play" onclick="playClip(\''+c.name+'\',\''+lbl+'\')">▶</button>'+
+      '<a class="clipbtn" href="/clip?name='+encodeURIComponent(c.name)+'" download="'+c.name+'">download</a>'+
+      '<button class="clipbtn del" onclick="delClip(\''+c.name+'\')">wis</button>'+
+      '</div></div>';}).join('');
+}catch(e){}}
+async function delClip(n){if(!confirm('Deze clip verwijderen?'))return;await fetch('/clip_del?name='+encodeURIComponent(n));loadClips();}
+
+// ---- Opnames-galerij ----
+async function loadRecordings(){try{const list=await jget('/api/1/recordings');
+  if(!Array.isArray(list)){$('recGallery').innerHTML='<span class="muted">geen opnames</span>';return;}
+  $('recCount').textContent=list.length+' beelden';
+  const recent=list.slice(-16).reverse();
+  if(!recent.length){$('recGallery').innerHTML='<span class="muted">nog geen beelden (camera neemt op bij GPS-lock)</span>';return;}
+  $('recGallery').innerHTML=recent.map(r=>{const n=r.path,ts=new Date(r.date).toLocaleTimeString('nl-NL');
+    return '<div style="background:var(--card2);border-radius:8px;overflow:hidden">'+
+      '<img src="/recframe?name='+encodeURIComponent(n)+'" style="width:100%;aspect-ratio:2/1;object-fit:cover;background:#000" loading="lazy">'+
+      '<div style="padding:6px 8px"><div class="muted" style="font-size:11px">'+ts+'</div>'+
+      '<div style="display:flex;gap:6px;margin-top:5px">'+
+      '<a class="recdl" href="/recframe?name='+encodeURIComponent(n)+'" download="'+n+'">download</a>'+
+      '<button class="recdel" onclick="delRec(\''+n+'\')">wis</button></div></div></div>';}).join('');
+}catch(e){$('recGallery').innerHTML='<span class="err-line">fout bij laden</span>';}}
+async function delRec(n){if(!confirm('Dit beeld verwijderen?'))return;await fetch('/rec_del?name='+encodeURIComponent(n));loadRecordings();}
+$('recRefresh').onclick=loadRecordings;
+
+function clock(){$('clock').textContent=new Date().toLocaleTimeString('nl-NL');}
+assignTabs();showTab('live');
+fillLedSelects();loadLedState();loadRec();
+tick();tickSys();tickSlow();tickImu();tickFrame();clock();
+setInterval(tick,1500);setInterval(tickFrame,1500);setInterval(tickSys,4000);setInterval(tickSlow,15000);setInterval(clock,1000);
+setInterval(tickImu,200);setInterval(loadRec,5000);
+</script></body></html>

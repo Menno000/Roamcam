@@ -8,10 +8,11 @@ Geen account. Geen cloud. Geen crypto. Hij stuurt nooit iets naar buiten. Alles 
 
 > Gemaakt in Nederland 🇳🇱, voor iedereen met zo'n camera in een la.
 
-<!-- Zet een screenshot van je dashboard in docs/screenshots/dashboard.png en haal de volgende regel uit commentaar:
-![Het dashboard](docs/screenshots/dashboard.png)
--->
-> 📸 *Screenshots komen hier — zie [docs/screenshots](docs/screenshots/) voor wat je vastlegt.*
+### 🖥️ Probeer het zonder de hardware
+
+Open **[`demo.html`](demo.html)** in een browser (downloaden, of de repo klonen en dubbelklikken) om door het hele dashboard te klikken met voorbeelddata — elk tabblad, live, zonder toestel. De snelste manier om te zien wat je krijgt.
+
+*Statische screenshots in deze README? Pak ze zo uit `demo.html` (gebruikt een demo-locatie, nooit die van jou) en zet ze in [docs/screenshots](docs/screenshots/).*
 
 ---
 
