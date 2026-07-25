@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.log
+dashboard.log
+track.ndjson
+clips/
+*.mp4
+*.srt
+.DS_Store
+Thumbs.db

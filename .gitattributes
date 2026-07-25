@@ -1,0 +1,4 @@
+# Keep LF everywhere — these scripts run on the Linux device.
+* text=auto eol=lf
+*.sh text eol=lf
+*.py text eol=lf
