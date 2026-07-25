@@ -20,11 +20,13 @@ Go to **Settings → Recorder**.
 
 Recording is **persistent**: turn it on, and the device resumes recording on every power-up. Wired into a car, it records whenever the ignition powers it and stops when you switch off. No button, no app.
 
-GPS position and G-sensor data are logged alongside the video in `clips/track.ndjson`.
+GPS position and G-sensor data are logged alongside the video in `clips/track.ndjson`, and every finished clip gets a matching `.srt` subtitle with the time, position, speed and heading for each second.
 
 ## Playback
 
 **Playback** lists your clips, newest first, with time and size. Hit ▶ to play one in the player at the top, or download / delete it. Delete asks first.
+
+Each clip has a synced **GPS overlay** — time, position, speed and heading — shown over the video in the dashboard player (toggle it with the CC button). The same data is saved as a standard `.srt` next to the clip, so VLC and most dashcam viewers show it too when you download a clip.
 
 ## The status LEDs
 

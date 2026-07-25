@@ -97,7 +97,7 @@ This is a hobby project shared as-is. A few honest notes:
 
 ## Roadmap
 
-- [ ] GPS overlay burned into playback via synced subtitles (`.srt`)
+- [x] GPS overlay on playback via synced subtitles — an `.srt` next to every clip (plays in VLC & most dashcam viewers) and a live overlay in the dashboard's own player
 - [ ] Day/night exposure profiles in the UI
 - [ ] Optional push of clips/telemetry to Home Assistant when it's on a network with internet
 - [ ] Motion / parking mode using the G-sensor

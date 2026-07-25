@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Hivemapper HDC - lokaal "alles-in-1" dashboard
 # Draait op het toestel zelf, serveert de pagina + proxy naar de lokale API (:5000) + systeeminfo.
-import json, os, socket, subprocess, urllib.request, glob, math, sqlite3, time, threading, calendar
+import json, os, socket, subprocess, urllib.request, glob, math, sqlite3, time, threading, calendar, re
 from urllib.parse import urlparse, parse_qs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -389,6 +389,95 @@ def gps_time_sync():
         time.sleep(15 if not synced else 120)
 
 
+def _srt_time(sec):
+    h = int(sec // 3600); m = int((sec % 3600) // 60); s = int(sec % 60)
+    ms = int(round((sec - int(sec)) * 1000))
+    return "%02d:%02d:%02d,%03d" % (h, m, s, ms)
+
+
+def _load_track():
+    out = []
+    try:
+        with open(CLIPS_DIR + "/track.ndjson") as f:
+            for ln in f:
+                try:
+                    o = json.loads(ln)
+                    out.append((o["t"], o.get("gps", {})))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return out
+
+
+def generate_srt(clip_path, start_epoch, duration, track):
+    idx = 1
+    cues = []
+    for i in range(int(duration)):
+        cue_epoch = start_epoch + i
+        best = None
+        bestd = 2.5
+        for e, g in track:
+            d = abs(e - cue_epoch)
+            if d < bestd:
+                bestd = d
+                best = g
+        if best is None:
+            continue
+        tstr = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(cue_epoch)) + " UTC"
+        lat, lon, fix = best.get("lat"), best.get("lon"), best.get("fix")
+        if lat is not None and lon is not None and fix and fix != "none":
+            kmh = round((best.get("speed") or 0) * 3.6)
+            line2 = "%.5f, %.5f   %d km/h" % (lat, lon, kmh)
+            if best.get("heading") is not None:
+                line2 += "   %d deg" % round(best["heading"])
+            body = tstr + "\n" + line2
+        else:
+            body = tstr + "\nno GPS fix"
+        cues.append("%d\n%s --> %s\n%s\n" % (idx, _srt_time(i), _srt_time(i + 1), body))
+        idx += 1
+    try:
+        with open(clip_path[:-4] + ".srt", "w") as f:
+            f.write("\n".join(cues))
+    except Exception:
+        pass
+
+
+def srt_loop():
+    # maakt per afgeronde clip een .srt met tijd/positie/snelheid uit de GPS-track
+    while True:
+        try:
+            clips = glob.glob(CLIPS_DIR + "/*.mp4")
+            starts = {}
+            for c in clips:
+                base = os.path.basename(c)[:-4]
+                try:
+                    starts[c] = calendar.timegm(time.strptime(base, "%Y%m%d_%H%M%S"))
+                except Exception:
+                    pass
+            ordered = sorted(starts, key=lambda c: starts[c])
+            if len(ordered) >= 2:
+                track = _load_track()
+                for i in range(len(ordered) - 1):  # laatste clip = nog bezig
+                    c = ordered[i]
+                    if os.path.exists(c[:-4] + ".srt"):
+                        continue
+                    dur = starts[ordered[i + 1]] - starts[c]
+                    if dur <= 0 or dur > rec_cfg.get("seg", 60) * 3:
+                        dur = rec_cfg.get("seg", 60)
+                    generate_srt(c, starts[c], dur, track)
+            # track.ndjson bijhouden op ~2 uur
+            tf = CLIPS_DIR + "/track.ndjson"
+            if os.path.exists(tf):
+                lines = open(tf).readlines()
+                if len(lines) > 7200:
+                    with open(tf, "w") as f:
+                        f.writelines(lines[-7200:])
+        except Exception:
+            pass
+        time.sleep(15)
+
+
 def track_loop():
     # continue GPS+IMU-track (NDJSON) zolang er opgenomen wordt
     while True:
@@ -718,6 +807,19 @@ class H(BaseHTTPRequestHandler):
                     pass
                 return
             return self._send(404, "text/plain", "no clip")
+        if p == "/clipvtt":
+            q = parse_qs(urlparse(self.path).query)
+            name = q.get("name", [""])[0]
+            if name and "/" not in name and ".." not in name:
+                base = name[:-4] if name.endswith(".mp4") else name
+                srt = os.path.join(CLIPS_DIR, base + ".srt")
+                try:
+                    body = open(srt).read()
+                    vtt = "WEBVTT\n\n" + re.sub(r"(\d\d:\d\d:\d\d),(\d\d\d)", r"\1.\2", body)
+                    return self._send(200, "text/vtt", vtt)
+                except Exception:
+                    pass
+            return self._send(404, "text/plain", "no subtitles")
         if p == "/clip_del":
             q = parse_qs(urlparse(self.path).query)
             name = q.get("name", [""])[0]
@@ -1207,7 +1309,14 @@ $('recSeg').onchange=()=>fetch('/rec/set?seg='+$('recSeg').value);
 $('recCap').onchange=()=>fetch('/rec/set?cap_gb='+$('recCap').value);
 
 // ---- Video-clips ----
-function playClip(n,label){$('clipVideo').src='/clip?name='+encodeURIComponent(n);$('clipPlayer').style.display='block';$('clipNow').textContent='▶ '+(label||n);$('clipPlayer').scrollIntoView({behavior:'smooth',block:'nearest'});}
+function playClip(n,label){const v=$('clipVideo');v.pause();v.innerHTML='';v.removeAttribute('src');
+  v.src='/clip?name='+encodeURIComponent(n);
+  const tr=document.createElement('track');tr.kind='subtitles';tr.label='GPS';tr.srclang='nl';tr.default=true;tr.src='/clipvtt?name='+encodeURIComponent(n);v.appendChild(tr);
+  const showSubs=()=>{try{if(v.textTracks&&v.textTracks[0])v.textTracks[0].mode='showing';}catch(e){}};
+  v.addEventListener('loadeddata',showSubs,{once:true});
+  v.load();v.play().then(showSubs).catch(()=>{});
+  $('clipPlayer').style.display='block';$('clipNow').textContent='▶ '+(label||n)+'  ·  GPS-overlay aan (CC-knop = aan/uit)';
+  $('clipPlayer').scrollIntoView({behavior:'smooth',block:'nearest'});}
 async function loadClips(){try{const list=await jget('/clips.json');
   const tot=list.reduce((a,c)=>a+(c.size||0),0);
   $('clipCount').textContent=(list.length||0)+' clips · '+fmtBytes(tot);
@@ -1258,6 +1367,7 @@ if __name__ == "__main__":
     threading.Thread(target=led_driver, daemon=True).start()
     threading.Thread(target=retention_loop, daemon=True).start()
     threading.Thread(target=track_loop, daemon=True).start()
+    threading.Thread(target=srt_loop, daemon=True).start()
     threading.Thread(target=gps_time_sync, daemon=True).start()
     # standalone-modus + recorder hervatten na reboot
     if rec_cfg.get("standalone"):
