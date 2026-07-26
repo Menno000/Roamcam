@@ -56,20 +56,39 @@ Hij is licht: het dashboard zit rond de 0–6% van één CPU-core en ~28&nbsp;MB
 
 ## Snel starten
 
-SSH naar de camera (standaard gebruiker `root`, geen wachtwoord) en draai:
+Nog nooit een commando getypt? Je kopieert twee bestanden naar de camera en typt één regel — hier is precies waar je moet klikken en typen.
+
+**1. Open een terminal.** Dit is gewoon een zwart tekstvenstertje dat op elke computer al aanwezig is:
+
+- **Windows:** druk op de ⊞ Windows-toets, typ `PowerShell`, druk op Enter.
+- **Mac:** druk op `Cmd + Spatie`, typ `Terminal`, druk op Enter.
+- **Linux:** die weet je zelf wel te vinden.
+
+**2. Verbind met de wifi van de camera.** De HDC zendt zelf een wifi-netwerk uit genaamd `dashcam` (wachtwoord `hivemapper`) — sluit hierop aan zoals je op elk ander wifi-netwerk zou aansluiten, via de gewone wifi-instellingen van je telefoon/laptop.
+
+**3. Typ in de terminal** `cd ` (met een spatie erachter), sleep de map waarin je Roamcam hebt gedownload het venster in, en druk op Enter — dat brengt je in die map. Plak daarna dit en druk op Enter:
 
 ```sh
-# vanaf je computer, kopieer de twee bestanden
 scp dashboard_server.py install.sh root@192.168.0.10:/tmp/
-
-# dan op de camera
-ssh root@192.168.0.10
-cd /tmp && sh install.sh
 ```
 
-Klaar. Open `http://192.168.0.10:8080` en je kijkt naar je eigen dashcam.
+*(Er kan gevraagd worden "are you sure you want to continue connecting?" — typ `yes` en druk op Enter. Er wordt niet om een wachtwoord gevraagd.)*
 
-De installer zet de app op de persistente opslag, haakt 'm in het opstartproces zodat hij na elke stroomonderbreking terugkomt, en start 'm. Volledige uitleg met plaatjes: **[docs/INSTALL.md](docs/INSTALL.md)**.
+**4. Plak dit en druk op Enter** — dit installeert en start alles op de camera:
+
+```sh
+ssh root@192.168.0.10 "cd /tmp && sh install.sh"
+```
+
+**5. Open een gewoon browservenster** (Chrome, Safari, Edge, wat je maar gebruikt) en ga naar:
+
+```
+http://192.168.0.10:8080
+```
+
+Dat is je dashboard. Verder niets te installeren, geen account nodig.
+
+Vastgelopen bij een stap, of wil je weten wat elk commando precies doet? **[docs/INSTALL.md](docs/INSTALL.md)** heeft dezelfde stappen met plaatjes en een probleemoplossingssectie.
 
 ---
 

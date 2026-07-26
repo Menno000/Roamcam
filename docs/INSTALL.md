@@ -2,6 +2,8 @@
 
 This takes about five minutes. You need the camera powered on and reachable over the network.
 
+> **New to typing commands?** Every step below happens in a **terminal** — a plain text window built into every computer. Open one first: on Windows press the ⊞ key and type `PowerShell`, on Mac press `Cmd + Space` and type `Terminal`. You'll copy each grey code block and paste it in (Windows: right-click to paste; Mac: `Cmd + V`), then press Enter and wait for it to finish before pasting the next one.
+
 ## 1. Connect to the camera
 
 The HDC has **root SSH open with no password** on its development firmware — that's what makes Roamcam possible without reflashing.

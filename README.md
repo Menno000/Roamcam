@@ -56,20 +56,39 @@ It's light: the dashboard sits around 0–6% of one CPU core and ~28&nbsp;MB of 
 
 ## Quick start
 
-SSH into the camera (default user `root`, no password) and run:
+Never typed a command in your life? You're copying two files onto the camera and running one line — here's exactly where to click and type.
+
+**1. Open a terminal.** This is just a plain black text window that comes with every computer:
+
+- **Windows:** press the ⊞ Windows key, type `PowerShell`, press Enter.
+- **Mac:** press `Cmd + Space`, type `Terminal`, press Enter.
+- **Linux:** you know where it is.
+
+**2. Connect to the camera's Wi-Fi.** The HDC broadcasts its own network named `dashcam` (password `hivemapper`) — join it exactly like you'd join any Wi-Fi network, from your phone/laptop's normal Wi-Fi settings.
+
+**3. In the terminal**, type `cd ` (with a space after it), drag the folder where you downloaded Roamcam into the window, and press Enter — that moves you into it. Then paste this and press Enter:
 
 ```sh
-# from your computer, copy the two files over
 scp dashboard_server.py install.sh root@192.168.0.10:/tmp/
-
-# then on the camera
-ssh root@192.168.0.10
-cd /tmp && sh install.sh
 ```
 
-That's it. Open `http://192.168.0.10:8080` and you're looking at your dashcam.
+*(It may ask "are you sure you want to continue connecting?" — type `yes` and press Enter. It won't ask for a password.)*
 
-The installer copies the app to the device's persistent storage, wires it into the boot process so it comes back after every power cycle, and starts it. Full walkthrough with pictures: **[docs/INSTALL.md](docs/INSTALL.md)**.
+**4. Paste this and press Enter** — this installs and starts everything on the camera:
+
+```sh
+ssh root@192.168.0.10 "cd /tmp && sh install.sh"
+```
+
+**5. Open a normal browser window** (Chrome, Safari, Edge, whatever) and go to:
+
+```
+http://192.168.0.10:8080
+```
+
+That's your dashboard. Nothing else to install, no account to make.
+
+Stuck at any step, or want to know what each command actually does? **[docs/INSTALL.md](docs/INSTALL.md)** has the same steps with pictures and a troubleshooting section.
 
 Prefer Dutch? De volledige handleiding staat in **[het Nederlands](README.nl.md)**.
 
