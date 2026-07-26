@@ -12,7 +12,18 @@ No account. No cloud. No crypto. It never phones home. Everything runs on the de
 
 Open **[`demo.html`](demo.html)** in any browser (download it, or clone and double-click it) to click through the whole dashboard with sample data — every tab, live-updating, no device needed. It's the fastest way to see what you're getting.
 
-*Want static screenshots in this README? Grab them straight from `demo.html` (it uses a demo location, never your own) and drop them in [docs/screenshots](docs/screenshots/).*
+### 📸 Screenshots
+
+<p>
+  <img src="docs/screenshots/dashboard.png" width="49%" alt="Live tab: camera, IMU oscilloscope, GPS/GNSS and RF telemetry">
+  <img src="docs/screenshots/playback.png" width="49%" alt="Playback tab: clip list with lock, filter and bulk delete">
+</p>
+<p>
+  <img src="docs/screenshots/settings.png" width="49%" alt="Settings tab: recorder, preferences and per-LED control">
+  <img src="docs/screenshots/system.png" width="49%" alt="System tab: CPU, storage, services, network, firmware">
+</p>
+
+*All shown with `demo.html`'s sample data — demo location (Amsterdam), fake device IDs. Never a real device or a real location.*
 
 ---
 

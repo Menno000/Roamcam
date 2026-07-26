@@ -12,7 +12,18 @@ Geen account. Geen cloud. Geen crypto. Hij stuurt nooit iets naar buiten. Alles 
 
 Open **[`demo.html`](demo.html)** in een browser (downloaden, of de repo klonen en dubbelklikken) om door het hele dashboard te klikken met voorbeelddata — elk tabblad, live, zonder toestel. De snelste manier om te zien wat je krijgt.
 
-*Statische screenshots in deze README? Pak ze zo uit `demo.html` (gebruikt een demo-locatie, nooit die van jou) en zet ze in [docs/screenshots](docs/screenshots/).*
+### 📸 Screenshots
+
+<p>
+  <img src="docs/screenshots/dashboard.png" width="49%" alt="Live-tab: camera, IMU-oscilloscoop, GPS/GNSS en RF-telemetrie">
+  <img src="docs/screenshots/playback.png" width="49%" alt="Terugkijk-tab: cliplijst met vergrendelen, filteren en bulk wissen">
+</p>
+<p>
+  <img src="docs/screenshots/settings.png" width="49%" alt="Instellingen-tab: recorder, voorkeuren en LED-bediening per LED">
+  <img src="docs/screenshots/system.png" width="49%" alt="Systeem-tab: CPU, opslag, services, netwerk, firmware">
+</p>
+
+*Allemaal met de voorbeelddata uit `demo.html` — demo-locatie (Amsterdam), nep-toestel-ID's. Nooit een echt toestel of een echte locatie.*
 
 ---
 
