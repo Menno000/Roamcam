@@ -8,6 +8,8 @@ No account. No cloud. No crypto. It never phones home. Everything runs on the de
 
 > Made in the Netherlands 🇳🇱, for anyone who has one of these cameras sitting in a drawer.
 
+> **⚠️ Which hardware does this work on?** Hivemapper sold three generations under different names. Roamcam is built and tested on the **HDC** (should also work on the **HDC-S**, same core hardware) — the newer **Bee** is completely different hardware and is **not supported**. Not sure which one you have? **[Check here](docs/HARDWARE.md#which-hivemapper-do-i-have)** before you start.
+
 ### 🖥️ Try it without the hardware
 
 Open **[`demo.html`](demo.html)** in any browser (download it, or clone and double-click it) to click through the whole dashboard with sample data — every tab, live-updating, no device needed. It's the fastest way to see what you're getting.
@@ -50,7 +52,7 @@ It's light: the dashboard sits around 0–6% of one CPU core and ~28&nbsp;MB of 
 - The camera and your computer on the same network. The HDC broadcasts its own Wi-Fi access point (`dashcam`), or you can put it on your LAN.
 - Five minutes.
 
-> Hivemapper has sold three hardware generations under different names. This is built and tested on the **HDC** (should also work on the **HDC-S**, same core hardware); the newer **Bee** is completely different hardware and isn't supported. Not sure which one you have? **[docs/HARDWARE.md](docs/HARDWARE.md#which-hivemapper-do-i-have)** has a comparison table and how to check.
+> Not sure if yours is an HDC, HDC-S, or Bee? See [docs/HARDWARE.md](docs/HARDWARE.md#which-hivemapper-do-i-have) for how to tell.
 
 ---
 

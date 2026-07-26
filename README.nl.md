@@ -8,6 +8,8 @@ Geen account. Geen cloud. Geen crypto. Hij stuurt nooit iets naar buiten. Alles 
 
 > Gemaakt in Nederland 🇳🇱, voor iedereen met zo'n camera in een la.
 
+> **⚠️ Voor welke hardware werkt dit?** Hivemapper heeft drie generaties verkocht onder verschillende namen. Roamcam is gebouwd en getest op de **HDC** (werkt vermoedelijk ook op de **HDC-S**, zelfde basishardware) — de nieuwere **Bee** is compleet andere hardware en wordt **niet ondersteund**. Niet zeker welke jij hebt? **[Check het hier](docs/HARDWARE.md#which-hivemapper-do-i-have)** voordat je begint.
+
 ### 🖥️ Probeer het zonder de hardware
 
 Open **[`demo.html`](demo.html)** in een browser (downloaden, of de repo klonen en dubbelklikken) om door het hele dashboard te klikken met voorbeelddata — elk tabblad, live, zonder toestel. De snelste manier om te zien wat je krijgt.
@@ -50,7 +52,7 @@ Hij is licht: het dashboard zit rond de 0–6% van één CPU-core en ~28&nbsp;MB
 - De camera en je computer op hetzelfde netwerk. De HDC zet zelf een wifi-accesspoint op (`dashcam`), of je hangt 'm aan je LAN.
 - Vijf minuten.
 
-> Hivemapper heeft drie hardware-generaties verkocht onder verschillende namen. Dit is gebouwd en getest op de **HDC** (werkt vermoedelijk ook op de **HDC-S**, zelfde basishardware); de nieuwere **Bee** is compleet andere hardware en wordt niet ondersteund. Niet zeker welke jij hebt? **[docs/HARDWARE.md](docs/HARDWARE.md#which-hivemapper-do-i-have)** heeft een vergelijkingstabel en hoe je het checkt.
+> Niet zeker of jij een HDC, HDC-S of Bee hebt? Zie [docs/HARDWARE.md](docs/HARDWARE.md#which-hivemapper-do-i-have) voor hoe je dat checkt.
 
 ---
 
