@@ -107,13 +107,13 @@ Ideas and pull requests welcome.
 
 ---
 
-## Support this project ☕
+## Support this project ❤️
 
-I build this in my spare time and give it away for free. If Roamcam saved you buying a dashcam, or you just think it's neat, a coffee genuinely makes my day and keeps the work going:
+I build this in my spare time and give it away for free. If Roamcam saved you buying a dashcam, or you just think it's neat, sponsoring the project genuinely helps and keeps the work going:
 
-**[☕ Buy me a coffee](https://www.buymeacoffee.com/YOUR_HANDLE)**
+**[❤️ Sponsor on GitHub](https://github.com/sponsors/Menno000)**
 
-*(Maintainer: replace `YOUR_HANDLE` with your real link, and update `.github/FUNDING.yml`.)*
+There's also a **Sponsor** button at the top of this repository.
 
 ---
 

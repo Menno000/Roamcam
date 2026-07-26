@@ -92,13 +92,13 @@ Dit is een hobbyproject, gedeeld zoals het is. Een paar eerlijke opmerkingen:
 
 ---
 
-## Steun dit project ☕
+## Steun dit project ❤️
 
-Ik bouw dit in mijn vrije tijd en geef het gratis weg. Als Roamcam je een dashcam heeft bespaard, of je vindt het gewoon leuk, dan maakt een kopje koffie mijn dag echt goed en houdt het de ontwikkeling gaande:
+Ik bouw dit in mijn vrije tijd en geef het gratis weg. Als Roamcam je een dashcam heeft bespaard, of je vindt het gewoon leuk, dan helpt sponsoren echt en houdt het de ontwikkeling gaande:
 
-**[☕ Trakteer me op een koffie](https://www.buymeacoffee.com/YOUR_HANDLE)**
+**[❤️ Sponsor op GitHub](https://github.com/sponsors/Menno000)**
 
-*(Beheerder: vervang `YOUR_HANDLE` door je echte link en werk `.github/FUNDING.yml` bij.)*
+Er staat ook een **Sponsor**-knop bovenaan deze repo.
 
 ---
 
