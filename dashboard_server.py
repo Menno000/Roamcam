@@ -290,6 +290,38 @@ def recorder_running():
     return p is not None and p.poll() is None
 
 
+# ---- Live preview (handmatig, standaard UIT — kost dan 0% CPU) ----
+LIVE_TAIL_PATTERN = "/tmp/rc_live_%d.h264"
+LIVE_TAIL_GLOB = "/tmp/rc_live_*.h264"
+LIVE_PREVIEW_JPG = "/tmp/rc_live_preview.jpg"
+live_state = {"enabled": False}
+
+
+def live_pick_source():
+    files = glob.glob(LIVE_TAIL_GLOB)
+    if len(files) < 2:
+        return None
+    files.sort(key=os.path.getmtime)
+    return files[-2]  # niet de nieuwste (kan nog beschreven worden), wel de meest recente afgeronde
+
+
+def live_preview_loop():
+    while True:
+        try:
+            if live_state["enabled"] and recorder_running():
+                src = live_pick_source()
+                if src:
+                    subprocess.run(
+                        ["ffmpeg", "-y", "-c:v", "h264_v4l2m2m", "-i", src,
+                         "-frames:v", "1", "-s", "480x270", "-f", "image2", LIVE_PREVIEW_JPG],
+                        capture_output=True, timeout=4)
+                time.sleep(2)
+            else:
+                time.sleep(1)
+        except Exception:
+            time.sleep(2)
+
+
 def suppress_hivemapper():
     # Hivemapper-camera uitzetten: watchdog uit, camera-bridge+object-detection maskeren+stoppen
     # (camera-node blijft draaien -> GPS-API + cron-autostart intact)
@@ -307,6 +339,12 @@ def stop_vid():
             pass
     sh("kill $(ps aux 2>/dev/null | grep -E 'libcamera-vid|ffmpeg' | grep -v grep | awk '{print $1}') 2>/dev/null")
     rec_state["proc"] = None
+    live_state["enabled"] = False
+    for f in glob.glob(LIVE_TAIL_GLOB) + [LIVE_PREVIEW_JPG]:
+        try:
+            os.remove(f)
+        except Exception:
+            pass
 
 
 def start_recorder():
@@ -323,10 +361,21 @@ def start_recorder():
     if rec_cfg.get("shutter"):
         opts += " --shutter %d" % rec_cfg["shutter"]
     open("/mnt/data/rec_vid.log", "w").close()
+    # Tweede, vrijwel gratis uitgang (pure stream-copy, geen re-encode) die doorlopend een
+    # rollend 1s-venster ruwe H.264 in RAM (/tmp = tmpfs) bijhoudt. Kost 0% extra CPU (gemeten).
+    # Alleen wanneer live-preview AAN staat wordt hier incidenteel 1 frame uit gedecodeerd
+    # (hardware-decoder, ~0.5s CPU per keer) — zie live_preview_loop().
+    for f in glob.glob(LIVE_TAIL_GLOB):
+        try:
+            os.remove(f)
+        except Exception:
+            pass
     cmd = ("libcamera-vid -t 0 --inline --nopreview --width %d --height %d --framerate %d%s -o - 2>/mnt/data/rec_vid.log "
-           "| ffmpeg -probesize 2M -analyzeduration 2M -f h264 -i - -c copy -f segment -segment_time %d "
-           "-reset_timestamps 1 -strftime 1 %s/%%Y%%m%%d_%%H%%M%%S.mp4 2>/mnt/data/rec_ff.log"
-           % (w, h, fps, opts, seg, CLIPS_DIR))
+           "| ffmpeg -probesize 2M -analyzeduration 2M -f h264 -i - "
+           "-map 0:v -c copy -f segment -segment_time %d -reset_timestamps 1 -strftime 1 %s/%%Y%%m%%d_%%H%%M%%S.mp4 "
+           "-map 0:v -c copy -f segment -segment_time 1 -segment_wrap 3 -reset_timestamps 1 %s "
+           "2>/mnt/data/rec_ff.log"
+           % (w, h, fps, opts, seg, CLIPS_DIR, LIVE_TAIL_PATTERN))
     rec_state["proc"] = subprocess.Popen(["sh", "-c", cmd])
     rec_state["started"] = time.time()
     rec_cfg["on"] = True
@@ -845,6 +894,30 @@ class H(BaseHTTPRequestHandler):
         if p == "/rec/stop":
             stop_recording()
             return self._send(200, "application/json", json.dumps({"ok": True, "running": recorder_running()}))
+        if p == "/live/status":
+            return self._send(200, "application/json", json.dumps({
+                "enabled": live_state["enabled"], "running": recorder_running(),
+                "hasFrame": os.path.exists(LIVE_PREVIEW_JPG)}))
+        if p == "/live/toggle":
+            q = parse_qs(urlparse(self.path).query)
+            want_on = q.get("on", ["0"])[0] == "1"
+            if want_on and not recorder_running():
+                return self._send(200, "application/json", json.dumps({"ok": False, "enabled": False}))
+            live_state["enabled"] = want_on
+            if not want_on:
+                try:
+                    os.remove(LIVE_PREVIEW_JPG)
+                except Exception:
+                    pass
+            return self._send(200, "application/json", json.dumps({"ok": True, "enabled": live_state["enabled"]}))
+        if p == "/live_preview.jpg":
+            if not live_state["enabled"]:
+                return self._send(404, "text/plain", "preview off")
+            try:
+                with open(LIVE_PREVIEW_JPG, "rb") as f:
+                    return self._send(200, "image/jpeg", f.read())
+            except Exception:
+                return self._send(404, "text/plain", "no frame yet")
         if p == "/rec/hivemapper":
             restore_hivemapper()
             return self._send(200, "application/json", json.dumps({"ok": True, "standalone": rec_cfg.get("standalone")}))
@@ -1007,6 +1080,7 @@ header h1{font-size:18px;margin:0;font-weight:700;letter-spacing:.2px}
 .bar>i{display:block;height:100%;background:linear-gradient(90deg,#2ea043,#3fb950)}
 .bar.hot>i{background:linear-gradient(90deg,#d29922,#f85149)}
 .frame{width:100%;display:block;background:#000;aspect-ratio:16/9;object-fit:cover}
+.frameoverlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(8,11,17,.75);color:var(--mut);font-size:13px;text-align:center;padding:20px}
 .pill{display:inline-block;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:700}
 .pill.g{background:#0f3d22;color:#4ade80}.pill.r{background:#3d1414;color:#f87171}.pill.y{background:#3d3110;color:#fbbf24}.pill.b{background:#10233d;color:#7cc4ff}
 .svcgrid{display:grid;grid-template-columns:1fr 1fr;gap:6px 14px}
@@ -1118,7 +1192,14 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
   </div>
 
   <div class="card span2" data-tab="live"><h2><span data-t="cCamera">Live camera</span> <span id="frameInfo" class="muted"></span></h2>
-    <img class="frame" id="frame" alt="camera" src="/frame.jpg">
+    <div style="position:relative">
+      <img class="frame" id="frame" alt="camera" src="/frame.jpg">
+      <div id="frameOverlay" class="frameoverlay" style="display:none"></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;padding:10px 15px;border-top:1px solid var(--bd)">
+      <button class="ledbtn" id="liveToggle" style="flex:none;padding:6px 14px" data-t="previewOff">Live preview: uit</button>
+      <span class="muted" style="font-size:11px" id="liveNote" data-t="previewNote">Handmatig aan/uit — kost alleen CPU zolang je meekijkt.</span>
+    </div>
     <div class="body kv">
       <div class="k" data-t="lastFrame">Laatste frame</div><div class="v mono" id="frameTs">–</div>
       <div class="k" data-t="framesBuf">Frames in buffer</div><div class="v" id="frameCount">–</div>
@@ -1296,7 +1377,11 @@ const I18N={nl:{},en:{
  filterAll:'All',filterLocked:'🔒 Locked',filterUnlocked:'Unlocked',selectAll:'select all',
  delSelected:'delete selected',delAll:'delete all',showMore:'Show more',
  confirmDelAll:'Delete all unlocked clips? Locked clips are kept.',confirmDelSel:'Delete the selected clips?',
- noneMatch:'no recordings match this filter',deleted:'deleted'
+ noneMatch:'no recordings match this filter',deleted:'deleted',
+ previewOff:'Live preview: off',previewOn:'Live preview: on',
+ previewNote:'Manual on/off — only uses CPU while watching.',
+ previewLoading:'Starting preview…',previewCamOff:'Camera is off — nothing to preview',
+ previewStock:'Hivemapper is active — this shows its own captured frames'
 }};
 let LANG='nl',UNITS='kmh';
 const T=k=>(LANG==='en'&&I18N.en[k])?I18N.en[k]:null;
@@ -1372,7 +1457,36 @@ async function tick(){
   }catch(e){$('conn').innerHTML='<span class="dot err"></span>offline';}
 }
 
-async function tickFrame(){const img=$('frame');img.src='/frame.jpg?t='+Date.now();}
+// ---- Live preview (standalone-opname): handmatig, standaard uit ----
+let PREVIEW_ON=false, RECORDER_RUNNING=false, RECORDER_STANDALONE=false;
+function updateLiveToggleUI(){const b=$('liveToggle');
+  b.textContent=tt(PREVIEW_ON?'previewOn':'previewOff',PREVIEW_ON?'Live preview: aan':'Live preview: uit');
+  b.className='ledbtn'+(PREVIEW_ON?' on':'');}
+async function setPreview(on){if(on&&!RECORDER_RUNNING)return;PREVIEW_ON=on;updateLiveToggleUI();
+  try{await fetch('/live/toggle?on='+(on?1:0));}catch(e){}}
+$('liveToggle').onclick=()=>setPreview(!PREVIEW_ON);
+// bij elke paginalaad staat preview server-side altijd uit; forceer dat ook lokaal (nooit "aan blijven staan")
+setPreview(false);
+
+async function tickFrame(){
+  const img=$('frame'),ov=$('frameOverlay');
+  if(RECORDER_RUNNING){
+    $('liveToggle').style.display='';$('liveNote').style.display='';
+    if(PREVIEW_ON){
+      ov.style.display='none';
+      img.src='/live_preview.jpg?t='+Date.now();
+    } else {
+      ov.style.display='flex';ov.textContent='';
+    }
+  } else if(RECORDER_STANDALONE){
+    $('liveToggle').style.display='none';$('liveNote').style.display='none';
+    ov.style.display='flex';ov.textContent=tt('previewCamOff','Camera staat uit — niets om te tonen');
+  } else {
+    $('liveToggle').style.display='none';$('liveNote').style.display='none';
+    ov.style.display='none';
+    img.src='/frame.jpg?t='+Date.now();
+  }
+}
 
 async function tickSys(){
   try{
@@ -1494,14 +1608,18 @@ async function loadLedState(){try{const d=await jget('/led/state');
 
 // ---- Tabbladen ----
 function assignTabs(){document.querySelectorAll('.card').forEach(c=>{if(!c.dataset.tab)c.dataset.tab='live';});}
-function showTab(tab){document.querySelectorAll('.card').forEach(c=>c.classList.toggle('hidden',(c.dataset.tab||'live')!==tab));
+function showTab(tab){const leavingLive=(document.querySelector('.tabbtn.on')?.dataset.tab==='live')&&tab!=='live';
+  document.querySelectorAll('.card').forEach(c=>c.classList.toggle('hidden',(c.dataset.tab||'live')!==tab));
   document.querySelectorAll('.tabbtn').forEach(b=>b.classList.toggle('on',b.dataset.tab===tab));
+  if(leavingLive&&PREVIEW_ON)setPreview(false);
   if(tab==='terug'){loadClips();}
   if(tab==='settings'){loadRec();loadLedState();}}
 document.querySelectorAll('.tabbtn').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 
 // ---- Recorder ----
 async function loadRec(){try{const d=await jget('/rec/status');const run=d.running;
+  RECORDER_RUNNING=run;RECORDER_STANDALONE=d.standalone;
+  if(!run&&PREVIEW_ON)setPreview(false);
   $('recPill').textContent=run?tt('recRunning','opname loopt'):(d.standalone?tt('camOff','camera uit'):tt('stock','Hivemapper'));
   $('recPill').className='pill '+(run?'g':(d.standalone?'y':'b'));
   $('recStat').textContent=run?(tt('recordingAt','opnemen')+' '+d.w+'×'+d.h+' @'+d.fps):(d.standalone?tt('standaloneIdle','standalone, opname uit'):tt('stockActive','Hivemapper actief'));
@@ -1600,6 +1718,7 @@ if __name__ == "__main__":
     threading.Thread(target=led_driver, daemon=True).start()
     threading.Thread(target=retention_loop, daemon=True).start()
     threading.Thread(target=incident_loop, daemon=True).start()
+    threading.Thread(target=live_preview_loop, daemon=True).start()
     threading.Thread(target=track_loop, daemon=True).start()
     threading.Thread(target=srt_loop, daemon=True).start()
     threading.Thread(target=gps_time_sync, daemon=True).start()

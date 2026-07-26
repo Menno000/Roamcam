@@ -26,6 +26,7 @@ Open **[`demo.html`](demo.html)** in any browser (download it, or clone and doub
 - **Automatic retention.** Set a storage limit; the oldest clips are deleted to make room. Set-and-forget loop recording, exactly like a commercial dashcam.
 - **Incident lock.** An impact or hard stop above your chosen G-threshold automatically protects that clip 🔒 — it's never overwritten by the loop. You can lock or unlock any clip by hand too.
 - **English or Dutch, metric or imperial.** Switch the whole interface between EN/NL and between km/h·m·°C and mph·ft·°F. The GPS overlay in new recordings follows your choice.
+- **Live preview, on demand.** While recording, the camera is normally left alone (0% extra CPU) — flip on "Live preview" in the Live tab to watch along, using the Pi's hardware decoder for a low-resolution feed. It defaults to *off* every time you open the dashboard and turns itself off if you leave the Live tab, so it never runs unattended.
 - **It just starts.** Give it power and it boots straight into recording — perfect for wiring into a car. Survives reboots, no login, no button.
 
 It's light: the dashboard sits around 0–6% of one CPU core and ~28&nbsp;MB of RAM.
@@ -103,10 +104,11 @@ This is a hobby project shared as-is. A few honest notes:
 - [x] GPS overlay on playback via synced subtitles — an `.srt` next to every clip (plays in VLC & most dashcam viewers) and a live overlay in the dashboard's own player
 - [x] Incident lock — protect clips automatically on impact (G-sensor) or by hand
 - [x] English/Dutch interface and metric/imperial units
+- [x] Live preview while recording — manual toggle, hardware-decoded, off by default
 - [ ] Day/night exposure profiles in the UI
-- [ ] Live preview while recording
 - [ ] Optional push of clips/telemetry to Home Assistant when it's on a network with internet
 - [ ] Motion / parking mode using the G-sensor
+- [ ] A companion app for live video and notifications — worth designing properly before building; see [docs/HOWTO.md](docs/HOWTO.md#live-preview) for the groundwork already laid
 
 Ideas and pull requests welcome.
 

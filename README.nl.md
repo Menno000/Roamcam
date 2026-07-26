@@ -26,6 +26,7 @@ Open **[`demo.html`](demo.html)** in een browser (downloaden, of de repo klonen 
 - **Automatisch opruimen.** Stel een opslaglimiet in; de oudste clips worden gewist om ruimte te maken. Instellen en vergeten, precies als een echte dashcam.
 - **Incident-lock.** Een klap of noodstop boven jouw G-drempel beschermt die clip automatisch 🔒 — die wordt nooit overschreven door de loop. Je kunt clips ook met de hand vergrendelen.
 - **Engels of Nederlands, metrisch of imperiaal.** Zet de hele interface om tussen EN/NL en tussen km/u·m·°C en mph·ft·°F. De GPS-overlay in nieuwe opnames volgt je keuze.
+- **Live meekijken, op aanvraag.** Tijdens het opnemen wordt de camera normaal met rust gelaten (0% extra CPU) — zet "Live preview" aan in de Live-tab om mee te kijken, via de hardware-decoder van de Pi voor een laagresolutie-beeld. Staat elke keer dat je het dashboard opent standaard *uit*, en schakelt zichzelf uit zodra je de Live-tab verlaat — draait dus nooit onbeheerd door.
 - **Hij start gewoon.** Geef 'm stroom en hij begint meteen op te nemen — ideaal om in een auto te bouwen. Overleeft reboots, geen login, geen knop.
 
 Hij is licht: het dashboard zit rond de 0–6% van één CPU-core en ~28&nbsp;MB geheugen.

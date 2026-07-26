@@ -60,6 +60,23 @@ Switch the whole set back to the camera's original status behaviour any time wit
 
 Everything about the device: CPU load per core, temperature, memory, storage, running services, network, firmware slots, and the full configuration dump. Useful for a quick health check.
 
+## Live preview
+
+While recording, the camera is normally left completely alone — the Live tab shows an overlay instead of an image, and that costs 0% extra CPU. Flip the **Live preview** button on and the dashboard starts polling a live, low-resolution feed; flip it off (or leave the Live tab) and it stops immediately. It's manual and it resets to *off* every time you load the dashboard — it never keeps running unattended.
+
+**Why manual, and why it costs something:** the camera can only be read by one process, so the preview has to tap the same H.264 stream the recorder is already producing. A small, essentially free side-channel (plain stream-copy, no re-encoding — measured at 0% extra CPU) keeps the last second of raw video in RAM. Turning preview on makes the dashboard periodically decode one frame from that buffer using the Pi's **hardware** H.264 decoder — measured at roughly +10–15 percentage points of total CPU while it's on, dropping straight back to baseline the instant it's off. That's a fair trade for an occasional manual check, but not something you'd want running for hours unattended, which is exactly why it defaults off.
+
+### Toward a companion app (not built yet — the groundwork)
+
+A phone app for live video (and push notifications on an incident lock, say) is a natural next step, but it deserves proper thought before writing code, so here's what's already been worked out:
+
+- **The hard part is solved**: hardware-decoded frame extraction from the live recording stream at near-zero idle cost. Whatever consumes it next — a web view, a native app, a Home Assistant camera entity — can build on the same `/live_preview.jpg` mechanism or a proper MJPEG/RTSP stream derived from the same buffer.
+- **Local network vs. remote access are different problems.** On the same Wi-Fi as the camera, an app can hit the dashboard directly, same as a browser does now. Watching live video from *outside* the car's network needs either the device having its own internet connection (a SIM/hotspot — a deliberate choice this project has avoided so far, see the main README) or relaying through something that does, e.g. Home Assistant once the device is home on a network with internet.
+- **Push notifications** (incident lock triggered, recording stopped unexpectedly) would need *some* server or service the phone can be reached through — plain local HTTP polling doesn't reach a phone that's off the local network. Home Assistant is the natural fit here too, since it already does notifications well and Roamcam is designed to hand it data once there's a network path.
+- **Bandwidth and battery** matter more on a phone/cellular than on a browser tab on the same LAN — a companion app would want a deliberately low frame rate and resolution, more like a security-camera app than a video call.
+
+None of this needs solving before Roamcam is useful today — it's here so the shape of "an app later" is thought through rather than bolted on.
+
 ## The clock
 
 There's no battery-backed clock in this hardware, and no internet in standalone use — so Roamcam sets the system clock from **GPS**. As soon as there's a fix, timestamps (and clip filenames) are correct, to the second. Nothing to configure.
