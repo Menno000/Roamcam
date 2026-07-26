@@ -17,6 +17,11 @@ Go to **Settings → Recorder**.
 - **Camera off** stops recording but stays standalone (camera idle, Hivemapper not brought back). Handy for privacy or when parked.
 - **Segment length** — how long each clip is (30 s to 5 min). Shorter clips are easier to manage; longer ones mean fewer files.
 - **Storage limit** — the oldest clips are automatically deleted once total size passes this. Classic loop recording.
+- **Incident lock** — pick a G-force threshold (or Off). When the accelerometer sees an impact or hard braking above it, the current and previous clip are protected 🔒 and excluded from automatic deletion. Protected clips are highlighted in the Playback list; use the 🔒/🔓 button to protect or release any clip yourself.
+
+## Language and units
+
+**Settings → Preferences** switches the interface between **English and Dutch**, and between **km/h · metres · °C** and **mph · feet · °F**. Both are stored on the device, and the units also apply to the GPS overlay written into new recordings.
 
 Recording is **persistent**: turn it on, and the device resumes recording on every power-up. Wired into a car, it records whenever the ignition powers it and stops when you switch off. No button, no app.
 

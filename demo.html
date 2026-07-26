@@ -74,6 +74,8 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
 .clipbtn{background:#182236;color:var(--tx);border:1px solid var(--bd);border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px;text-decoration:none;white-space:nowrap}
 .clipbtn.play{background:#0d3a63;color:#9fd0ff;border-color:#164a7a}
 .clipbtn.del{background:#3d1414;color:#f87171;border-color:#5a1c1c}
+.clipbtn.lockon{background:#3b2f0c;border-color:#5c4a12}
+.cliprow.lockedrow{background:linear-gradient(90deg,rgba(210,153,34,.10),transparent 60%);border-left:3px solid var(--warn)}
 @media(max-width:600px){.clipbtn{padding:5px 7px;font-size:11px}}
 .ledswatch{width:14px;height:14px;border-radius:50%;border:1px solid #3a465c;flex:none}
 @media(max-width:700px){.card.span2{grid-column:span 1}.imugrid{grid-template-columns:1fr}.acol.center{border-left:0;padding-left:0;border-top:1px solid var(--bd);padding-top:10px}}
@@ -86,43 +88,43 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
   <div class="hstat"><b id="apiv">–</b><span>api</span></div>
   <div class="hstat"><b id="uptime">–</b><span>uptime</span></div>
   <div class="hstat"><b id="temp2">–</b><span>cpu temp</span></div>
-  <div class="hstat"><b id="clock">–</b><span>device tijd</span></div>
+  <div class="hstat"><b id="clock">–</b><span data-t="hDeviceTime">device tijd</span></div>
   <div class="hstat" style="margin-left:auto"><b id="conn"><span class="dot ok"></span>live</b><span>poll 1.5s</span></div>
 </header>
 <nav class="tabbar">
-  <button class="tabbtn on" data-tab="live">Live</button>
-  <button class="tabbtn" data-tab="terug">Terugkijken</button>
-  <button class="tabbtn" data-tab="settings">Instellingen</button>
-  <button class="tabbtn" data-tab="sys">Systeem</button>
+  <button class="tabbtn on" data-tab="live" data-t="tabLive">Live</button>
+  <button class="tabbtn" data-tab="terug" data-t="tabPlayback">Terugkijken</button>
+  <button class="tabbtn" data-tab="settings" data-t="tabSettings">Instellingen</button>
+  <button class="tabbtn" data-tab="sys" data-t="tabSystem">Systeem</button>
 </nav>
 <div class="grid">
 
-  <div class="card span2" id="imuCard"><h2>Live IMU / G-sensor
-      <span><span id="imuRate" class="muted" style="font-weight:400">– Hz</span> &nbsp;<span id="shockPill" class="pill g">rustig</span></span></h2>
+  <div class="card span2" id="imuCard" data-tab="live"><h2><span data-t="cImu">Live IMU / G-sensor</span>
+      <span><span id="imuRate" class="muted" style="font-weight:400">– Hz</span> &nbsp;<span id="shockPill" class="pill g">–</span></span></h2>
     <div class="body">
       <canvas id="scope" height="150" style="width:100%;height:150px;background:#080b11;border-radius:8px;display:block"></canvas>
       <div style="display:flex;gap:8px;font-size:11px;margin:6px 2px 12px" class="muted">
         <span style="color:#ff6b6b">■ X</span><span style="color:#51cf66">■ Y</span><span style="color:#4dabf7">■ Z</span>
-        <span style="margin-left:auto">accelerometer (g) · laatste ~1,5 s</span>
+        <span style="margin-left:auto" data-t="imuScope">accelerometer (g) · laatste ~1,5 s</span>
       </div>
       <div class="imugrid">
         <div class="acol">
-          <div class="atitle">Versnelling (g)</div>
+          <div class="atitle" data-t="imuAccel">Versnelling (g)</div>
           <div class="arow"><span>X</span><div class="abar"><i id="axb"></i></div><b id="axv">–</b></div>
           <div class="arow"><span>Y</span><div class="abar"><i id="ayb"></i></div><b id="ayv">–</b></div>
           <div class="arow"><span>Z</span><div class="abar"><i id="azb"></i></div><b id="azv">–</b></div>
         </div>
         <div class="acol">
-          <div class="atitle">Rotatie (°/s)</div>
+          <div class="atitle" data-t="imuGyro">Rotatie (°/s)</div>
           <div class="arow"><span>X</span><div class="abar g"><i id="gxb"></i></div><b id="gxv">–</b></div>
           <div class="arow"><span>Y</span><div class="abar g"><i id="gyb"></i></div><b id="gyv">–</b></div>
           <div class="arow"><span>Z</span><div class="abar g"><i id="gzb"></i></div><b id="gzv">–</b></div>
         </div>
         <div class="acol center">
-          <div class="atitle">G-kracht</div>
+          <div class="atitle" data-t="imuG">G-kracht</div>
           <div class="big" id="gforce">–</div>
-          <div class="muted" style="font-size:11px">piek <b id="gpeak" style="color:var(--warn)">–</b> · <span id="gpeakReset" style="cursor:pointer;color:var(--acc)">reset</span></div>
-          <div class="atitle" style="margin-top:12px">Stand</div>
+          <div class="muted" style="font-size:11px"><span data-t="imuPeak">piek</span> <b id="gpeak" style="color:var(--warn)">–</b> · <span id="gpeakReset" style="cursor:pointer;color:var(--acc)" data-t="reset">reset</span></div>
+          <div class="atitle" style="margin-top:12px" data-t="imuTilt">Stand</div>
           <div class="mono" id="tilt">–</div>
           <div class="muted" style="font-size:11px">chip <b id="imuTemp">–</b></div>
         </div>
@@ -130,22 +132,21 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
     </div>
   </div>
 
-  <div class="card span2"><h2>Live camera <span id="frameInfo" class="muted"></span></h2>
+  <div class="card span2" data-tab="live"><h2><span data-t="cCamera">Live camera</span> <span id="frameInfo" class="muted"></span></h2>
     <img class="frame" id="frame" alt="camera" src="/frame.jpg">
     <div class="body kv">
-      <div class="k">Laatste frame</div><div class="v mono" id="frameTs">–</div>
-      <div class="k">Frames in buffer</div><div class="v" id="frameCount">–</div>
-      <div class="k">Resolutie (config)</div><div class="v" id="res">–</div>
+      <div class="k" data-t="lastFrame">Laatste frame</div><div class="v mono" id="frameTs">–</div>
+      <div class="k" data-t="framesBuf">Frames in buffer</div><div class="v" id="frameCount">–</div>
+      <div class="k" data-t="resolution">Resolutie (config)</div><div class="v" id="res">–</div>
     </div>
   </div>
 
-  <div class="card span2" style="display:none"><h2>Opnames <span id="recCount" class="muted" style="font-weight:400"></span></h2><div class="body">
-    <div class="muted" style="font-size:12px;margin-bottom:10px">De meest recente camerabeelden. Losse video-clips verschijnen hier zodra we de eigen recorder bouwen.</div>
+  <div class="card span2" data-tab="none" style="display:none"><h2>Opnames <span id="recCount" class="muted" style="font-weight:400"></span></h2><div class="body">
     <div style="display:flex;gap:8px;margin-bottom:10px"><button class="ledbtn" id="recRefresh" style="flex:none;padding:6px 12px">Vernieuwen</button></div>
     <div id="recGallery" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px"></div>
   </div></div>
 
-  <div class="card span2"><h2>Video-opnames <span id="clipCount" class="muted" style="font-weight:400"></span></h2><div class="body">
+  <div class="card span2" data-tab="terug"><h2><span data-t="cClips">Video-opnames</span> <span id="clipCount" class="muted" style="font-weight:400"></span></h2><div class="body">
     <div id="clipPlayer" style="display:none;margin-bottom:12px">
       <video id="clipVideo" controls autoplay playsinline style="width:100%;max-height:52vh;background:#000;border-radius:8px;display:block"></video>
       <div class="muted" id="clipNow" style="font-size:11px;margin-top:4px"></div>
@@ -153,108 +154,119 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
     <div id="clipGallery"></div>
   </div></div>
 
-  <div class="card"><h2>Opname-recorder <span id="recPill" class="pill b">–</span></h2><div class="body">
+  <div class="card" data-tab="settings"><h2><span data-t="cRecorder">Opname-recorder</span> <span id="recPill" class="pill b">–</span></h2><div class="body">
     <div style="display:flex;gap:8px;margin-bottom:12px">
-      <button class="ledbtn" id="recStart">Start opname</button>
-      <button class="ledbtn" id="recStop">Camera uit</button>
+      <button class="ledbtn" id="recStart" data-t="btnStart">Start opname</button>
+      <button class="ledbtn" id="recStop" data-t="btnCamOff">Camera uit</button>
     </div>
     <div id="recErr" class="err-line" style="margin-bottom:8px;display:none"></div>
     <div class="kv">
-      <div class="k">Status</div><div class="v" id="recStat">–</div>
+      <div class="k" data-t="status">Status</div><div class="v" id="recStat">–</div>
       <div class="k">Clips</div><div class="v" id="recClips">–</div>
-      <div class="k">Segmentduur</div><div class="v"><select class="ledsel" id="recSeg" style="width:auto"><option value="30">30 s</option><option value="60">1 min</option><option value="180">3 min</option><option value="300">5 min</option></select></div>
-      <div class="k">Bewaarlimiet</div><div class="v"><select class="ledsel" id="recCap" style="width:auto"><option value="5">5 GB</option><option value="10">10 GB</option><option value="15">15 GB</option><option value="20">20 GB</option></select></div>
+      <div class="k" data-t="segLen">Segmentduur</div><div class="v"><select class="ledsel" id="recSeg" style="width:auto"><option value="30">30 s</option><option value="60">1 min</option><option value="180">3 min</option><option value="300">5 min</option></select></div>
+      <div class="k" data-t="storeLimit">Bewaarlimiet</div><div class="v"><select class="ledsel" id="recCap" style="width:auto"><option value="5">5 GB</option><option value="10">10 GB</option><option value="15">15 GB</option><option value="20">20 GB</option></select></div>
+      <div class="k" data-t="incLock">Incident-lock</div><div class="v"><select class="ledsel" id="recG" style="width:auto">
+        <option value="0" data-t="off">Uit</option><option value="1.5" data-t="sensHigh">Gevoelig (1.5 g)</option><option value="2" data-t="sensMed">Normaal (2.0 g)</option><option value="3" data-t="sensLow">Ongevoelig (3.0 g)</option></select></div>
     </div>
-    <div class="muted" style="font-size:11px;margin-top:10px">Standalone dashcam-modus: neemt op naar /mnt/data/clips (1080p30, hardware-H.264), oudste clips worden gewist boven de limiet, GPS + beweging meegelogd. "Camera uit" stopt de opname maar blijft standalone. Overleeft een reboot — werkt in de auto vanzelf zodra hij stroom krijgt.</div>
-    <div style="margin-top:6px"><a id="recHive" style="font-size:11px;color:var(--mut);cursor:pointer">↩ Hivemapper-camera herstellen</a></div>
+    <div class="muted" style="font-size:11px;margin-top:10px" data-t="recNote">Standalone dashcam-modus: neemt op naar /mnt/data/clips (1080p30, hardware-H.264), oudste clips worden gewist boven de limiet, GPS + beweging meegelogd. "Camera uit" stopt de opname maar blijft standalone. Overleeft een reboot — werkt in de auto vanzelf zodra hij stroom krijgt.</div>
+    <div class="muted" style="font-size:11px;margin-top:6px" data-t="lockNote">Incident-lock: bij een klap of noodstop boven de drempel wordt de clip beschermd 🔒 en nooit automatisch gewist.</div>
+    <div style="margin-top:6px"><a id="recHive" style="font-size:11px;color:var(--mut);cursor:pointer" data-t="restoreHive">↩ Hivemapper-camera herstellen</a></div>
   </div></div>
 
-  <div class="card"><h2>LED-bediening <span id="ledModeState" class="pill b">–</span></h2><div class="body">
+  <div class="card" data-tab="settings"><h2 data-t="cPrefs">Voorkeuren</h2><div class="body">
+    <div class="ledrow"><label data-t="language">Taal</label><select class="ledsel" id="uiLang">
+      <option value="nl">Nederlands</option><option value="en">English</option></select></div>
+    <div class="ledrow"><label data-t="units">Eenheden</label><select class="ledsel" id="uiUnits">
+      <option value="kmh" data-t="unitMetric">km/u · meter · °C</option><option value="mph" data-t="unitImperial">mph · feet · °F</option></select></div>
+    <div class="muted" style="font-size:11px;margin-top:8px" data-t="prefsNote">Geldt voor het dashboard én de GPS-overlay in nieuwe opnames. Wordt bewaard op het toestel.</div>
+  </div></div>
+
+  <div class="card" data-tab="settings"><h2><span data-t="cLed">LED-bediening</span> <span id="ledModeState" class="pill b">–</span></h2><div class="body">
     <div style="display:flex;gap:8px;margin-bottom:14px">
-      <button class="ledbtn" id="ledDashcam">Dashcam-status</button>
-      <button class="ledbtn" id="ledSelf">Zelf instellen</button>
+      <button class="ledbtn" id="ledDashcam" data-t="ledStock">Dashcam-status</button>
+      <button class="ledbtn" id="ledSelf" data-t="ledSelf">Zelf instellen</button>
     </div>
-    <div class="ledrow"><label>LED boven</label><span class="ledswatch" id="sw0"></span><select class="ledsel" id="ledfn0"></select></div>
-    <div class="ledrow"><label>LED midden</label><span class="ledswatch" id="sw1"></span><select class="ledsel" id="ledfn1"></select></div>
-    <div class="ledrow"><label>LED onder</label><span class="ledswatch" id="sw2"></span><select class="ledsel" id="ledfn2"></select></div>
-    <div class="muted" style="font-size:11px;margin-top:8px">Bij "zelf instellen" stuurt het dashboard de LEDs aan (blijft stabiel, ook na een API-herstart). GPS-fix / beweging / temp / snelheid updaten live mee.</div>
+    <div class="ledrow"><label data-t="ledTop">LED boven</label><span class="ledswatch" id="sw0"></span><select class="ledsel" id="ledfn0"></select></div>
+    <div class="ledrow"><label data-t="ledMid">LED midden</label><span class="ledswatch" id="sw1"></span><select class="ledsel" id="ledfn1"></select></div>
+    <div class="ledrow"><label data-t="ledBot">LED onder</label><span class="ledswatch" id="sw2"></span><select class="ledsel" id="ledfn2"></select></div>
+    <div class="muted" style="font-size:11px;margin-top:8px" data-t="ledNote">Bij "zelf instellen" stuurt het dashboard de LEDs aan (blijft stabiel, ook na een API-herstart). GPS-fix / beweging / temp / snelheid updaten live mee.</div>
   </div></div>
 
-  <div class="card"><h2>GPS / GNSS <span id="fixPill" class="pill b">–</span></h2><div class="body">
+  <div class="card" data-tab="live"><h2>GPS / GNSS <span id="fixPill" class="pill b">–</span></h2><div class="body">
     <div class="kv">
       <div class="k">Latitude</div><div class="v mono" id="lat">–</div>
       <div class="k">Longitude</div><div class="v mono" id="lon">–</div>
-      <div class="k">Satellieten</div><div class="v" id="sats">–</div>
-      <div class="k">Snelheid</div><div class="v" id="speed">–</div>
-      <div class="k">Koers</div><div class="v" id="heading">–</div>
-      <div class="k">Hoogte</div><div class="v" id="alt">–</div>
-      <div class="k">Nauwkeurigh. (H/V)</div><div class="v" id="acc">–</div>
+      <div class="k" data-t="sats">Satellieten</div><div class="v" id="sats">–</div>
+      <div class="k" data-t="speed">Snelheid</div><div class="v" id="speed">–</div>
+      <div class="k" data-t="heading">Koers</div><div class="v" id="heading">–</div>
+      <div class="k" data-t="altitude">Hoogte</div><div class="v" id="alt">–</div>
+      <div class="k" data-t="accuracy">Nauwkeurigh. (H/V)</div><div class="v" id="acc">–</div>
       <div class="k">TTFF</div><div class="v" id="ttff">–</div>
     </div>
     <div style="margin:10px 0 6px" class="muted" id="mapLink"></div>
     <div class="dop" id="dop"></div>
-    <details><summary>Ruwe NMEA (GGA)</summary><pre id="gga">–</pre></details>
+    <details><summary data-t="rawNmea">Ruwe NMEA (GGA)</summary><pre id="gga">–</pre></details>
   </div></div>
 
-  <div class="card"><h2>GNSS RF / anti-jamming</h2><div class="body kv">
-    <div class="k">Jamming-status</div><div class="v" id="jam">–</div>
-    <div class="k">Jam-indicator</div><div class="v" id="jamind">–</div>
-    <div class="k">Antenne</div><div class="v" id="ant">–</div>
-    <div class="k">Antenne-voeding</div><div class="v" id="antpwr">–</div>
-    <div class="k">Ruis / ms</div><div class="v" id="noise">–</div>
+  <div class="card" data-tab="live"><h2 data-t="cRf">GNSS RF / anti-jamming</h2><div class="body kv">
+    <div class="k" data-t="jamState">Jamming-status</div><div class="v" id="jam">–</div>
+    <div class="k" data-t="jamInd">Jam-indicator</div><div class="v" id="jamind">–</div>
+    <div class="k" data-t="antenna">Antenne</div><div class="v" id="ant">–</div>
+    <div class="k" data-t="antPower">Antenne-voeding</div><div class="v" id="antpwr">–</div>
+    <div class="k" data-t="noise">Ruis / ms</div><div class="v" id="noise">–</div>
     <div class="k">AGC</div><div class="v" id="agc">–</div>
     <div class="k">C/No</div><div class="v" id="cno">–</div>
-    <div class="k">Spoof-detectie</div><div class="v" id="spoof">–</div>
+    <div class="k" data-t="spoof">Spoof-detectie</div><div class="v" id="spoof">–</div>
   </div></div>
 
-  <div class="card"><h2>Systeem</h2><div class="body">
-    <div><div class="k muted">CPU-gebruik <span style="float:right" id="cpuAll">–</span></div><div class="bar" id="cpuAllWrap"><i id="cpuAllBar"></i></div></div>
+  <div class="card" data-tab="sys"><h2 data-t="cSystem">Systeem</h2><div class="body">
+    <div><div class="k muted"><span data-t="cpuUsage">CPU-gebruik</span> <span style="float:right" id="cpuAll">–</span></div><div class="bar" id="cpuAllWrap"><i id="cpuAllBar"></i></div></div>
     <div id="cores" style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:8px 0 4px"></div>
     <div class="kv" style="margin-top:8px">
-      <div class="k">CPU-temp</div><div class="v" id="temp">–</div>
-      <div class="k">CPU-klok / gov.</div><div class="v" id="mhz">–</div>
+      <div class="k" data-t="cpuTemp">CPU-temp</div><div class="v" id="temp">–</div>
+      <div class="k" data-t="cpuClock">CPU-klok / gov.</div><div class="v" id="mhz">–</div>
       <div class="k">Load (1/5/15m)</div><div class="v mono" id="load">–</div>
-      <div class="k">Cores / processen</div><div class="v" id="cpuproc">–</div>
+      <div class="k" data-t="coresProcs">Cores / processen</div><div class="v" id="cpuproc">–</div>
     </div>
-    <div style="margin-top:10px"><div class="k muted">Geheugen <span id="memTxt" style="float:right"></span></div><div class="bar" id="memBarWrap"><i id="memBar"></i></div></div>
+    <div style="margin-top:10px"><div class="k muted"><span data-t="memory">Geheugen</span> <span id="memTxt" style="float:right"></span></div><div class="bar" id="memBarWrap"><i id="memBar"></i></div></div>
     <div style="margin-top:8px"><div class="k muted">Swap <span id="swapTxt" style="float:right"></span></div><div class="bar"><i id="swapBar"></i></div></div>
   </div></div>
 
-  <div class="card"><h2>Opslag</h2><div class="body" id="disks"></div></div>
+  <div class="card" data-tab="sys"><h2 data-t="cStorage">Opslag</h2><div class="body" id="disks"></div></div>
 
-  <div class="card"><h2>Services</h2><div class="body"><div class="svcgrid" id="svc"></div></div></div>
+  <div class="card" data-tab="sys"><h2 data-t="cServices">Services</h2><div class="body"><div class="svcgrid" id="svc"></div></div></div>
 
-  <div class="card"><h2>Status-LEDs</h2><div class="body">
+  <div class="card" data-tab="sys"><h2 data-t="cLeds">Status-LEDs</h2><div class="body">
     <div class="leds" id="leds"></div>
     <div class="kv" style="margin-top:12px">
-      <div class="k">Sessie-ID</div><div class="v mono" id="session">–</div>
-      <div class="k">Serienr.</div><div class="v mono" id="serial">–</div>
+      <div class="k" data-t="sessionId">Sessie-ID</div><div class="v mono" id="session">–</div>
+      <div class="k" data-t="serialNo">Serienr.</div><div class="v mono" id="serial">–</div>
       <div class="k">Board</div><div class="v mono" id="board">–</div>
       <div class="k">Device-ID</div><div class="v mono" id="devid">–</div>
       <div class="k">SSID</div><div class="v mono" id="ssid">–</div>
     </div>
   </div></div>
 
-  <div class="card"><h2>Netwerk</h2><div class="body">
-    <div class="kv"><div class="k">IP-adres(sen)</div><div class="v mono" id="ips">–</div>
-    <div class="k">WiFi-modus</div><div class="v" id="wifimode">–</div></div>
+  <div class="card" data-tab="sys"><h2 data-t="cNetwork">Netwerk</h2><div class="body">
+    <div class="kv"><div class="k" data-t="ipAddr">IP-adres(sen)</div><div class="v mono" id="ips">–</div>
+    <div class="k" data-t="wifiMode">WiFi-modus</div><div class="v" id="wifimode">–</div></div>
     <div id="nets" style="margin-top:8px"></div>
   </div></div>
 
-  <div class="card"><h2>Data & opnames</h2><div class="body kv" id="datacounts">
+  <div class="card" data-tab="sys"><h2 data-t="cData">Data & opnames</h2><div class="body kv" id="datacounts">
     <div class="k">FrameKM buffer</div><div class="v" id="fkm">–</div>
-    <div class="k">GPS-logs</div><div class="v" id="gpslogs">–</div>
-    <div class="k">IMU-logs</div><div class="v" id="imulogs">–</div>
+    <div class="k" data-t="gpsLogs">GPS-logs</div><div class="v" id="gpslogs">–</div>
+    <div class="k" data-t="imuLogs">IMU-logs</div><div class="v" id="imulogs">–</div>
   </div><div class="body" style="border-top:1px solid var(--bd)" id="dbs"></div></div>
 
-  <div class="card"><h2>Firmware-slots (RAUC)</h2><div class="body"><pre id="rauc">–</pre></div></div>
+  <div class="card" data-tab="sys"><h2 data-t="cFirmware">Firmware-slots (RAUC)</h2><div class="body"><pre id="rauc">–</pre></div></div>
 
-  <div class="card span2"><h2>Volledige configuratie</h2><div class="body">
-    <details open><summary id="cfgSummary">Alle instellingen</summary><pre id="config">–</pre></details>
+  <div class="card span2" data-tab="sys"><h2 data-t="cConfig">Volledige configuratie</h2><div class="body">
+    <details open><summary id="cfgSummary">–</summary><pre id="config">–</pre></details>
   </div></div>
 
 </div>
-<div class="foot" id="foot">Hivemapper HDC lokaal dashboard &middot; data van API :5000 + systeem</div>
+<div class="foot" id="foot" data-t="foot">Hivemapper HDC lokaal dashboard &middot; data van API :5000 + systeem</div>
 </div>
 <script>
 /* ===== DEMO MODE — synthetic data only. No real device, no real location. ===== */
@@ -290,6 +302,48 @@ function _mock(u){const p=u.split('?')[0];return (p in MOCK)?MOCK[p]:{ok:true,do
 window.fetch=async(u)=>({ok:true,status:200,json:async()=>_mock(u),text:async()=>JSON.stringify(_mock(u))});
 /* ============================================================================= */
 const $=id=>document.getElementById(id);
+// ---- i18n + eenheden ----
+const I18N={nl:{},en:{
+ hDeviceTime:'device time',tabLive:'Live',tabPlayback:'Playback',tabSettings:'Settings',tabSystem:'System',
+ cImu:'Live IMU / G-sensor',imuScope:'accelerometer (g) · last ~1.5 s',imuAccel:'Acceleration (g)',imuGyro:'Rotation (°/s)',
+ imuG:'G-force',imuPeak:'peak',reset:'reset',imuTilt:'Attitude',calm:'calm',moving:'MOTION!',
+ cCamera:'Live camera',lastFrame:'Last frame',framesBuf:'Frames buffered',resolution:'Resolution (config)',
+ cClips:'Recordings',cRecorder:'Recorder',btnStart:'Start recording',btnCamOff:'Camera off',
+ status:'Status',segLen:'Segment length',storeLimit:'Storage limit',incLock:'Incident lock',
+ off:'Off',sensHigh:'Sensitive (1.5 g)',sensMed:'Normal (2.0 g)',sensLow:'Low (3.0 g)',
+ recNote:'Standalone dashcam mode: records to /mnt/data/clips (1080p30, hardware H.264), oldest clips are deleted past the limit, GPS + motion logged alongside. "Camera off" stops recording but stays standalone. Survives a reboot — in a car it just runs whenever it has power.',
+ lockNote:'Incident lock: on an impact or hard stop above the threshold the clip is protected 🔒 and never auto-deleted.',
+ restoreHive:'↩ Restore Hivemapper camera',
+ cPrefs:'Preferences',language:'Language',units:'Units',prefsNote:'Applies to the dashboard and to the GPS overlay in new recordings. Stored on the device.',
+ cLed:'LED control',ledStock:'Dashcam status',ledSelf:'Custom',ledTop:'Top LED',ledMid:'Middle LED',ledBot:'Bottom LED',
+ ledNote:'With "Custom" the dashboard drives the LEDs (stays stable, even after an API restart). GPS fix / motion / temp / speed update live.',
+ sats:'Satellites',speed:'Speed',heading:'Heading',altitude:'Altitude',accuracy:'Accuracy (H/V)',rawNmea:'Raw NMEA (GGA)',
+ cRf:'GNSS RF / anti-jamming',jamState:'Jamming state',jamInd:'Jam indicator',antenna:'Antenna',antPower:'Antenna power',noise:'Noise / ms',spoof:'Spoof detection',
+ cSystem:'System',cpuUsage:'CPU usage',cpuTemp:'CPU temp',cpuClock:'CPU clock / gov.',coresProcs:'Cores / processes',memory:'Memory',
+ cStorage:'Storage',cServices:'Services',cLeds:'Status LEDs',sessionId:'Session ID',serialNo:'Serial no.',
+ cNetwork:'Network',ipAddr:'IP address(es)',wifiMode:'WiFi mode',cData:'Data & recordings',gpsLogs:'GPS logs',imuLogs:'IMU logs',
+ cFirmware:'Firmware slots (RAUC)',cConfig:'Full configuration',allSettings:'All settings',
+ foot:'Hivemapper HDC local dashboard · data from API :5000 + system',
+ noFix:'no fix',searching:'searching',recRunning:'recording',camOff:'camera off',stock:'Hivemapper',
+ standaloneIdle:'standalone, not recording',stockActive:'Hivemapper active',recordingAt:'recording',
+ clips:'clips',noClips:'no recordings yet — start recording in Settings',
+ play:'play',download:'download',del:'delete',lock:'lock',unlock:'unlock',locked:'protected',
+ confirmDel:'Delete this clip?',confirmHive:'Restore the Hivemapper camera (leave standalone)?',
+ freeing:'freeing camera…',stopping:'stopping…',restoring:'restoring…',
+ noPos:'no position fix (indoors / poor sky view)',showMap:'Show on map',ofWhich:'used',visible:'visible',
+ subsOn:'GPS overlay on (CC button toggles)',none:'none',
+ healthy:'healthy',problem:'problem',unitMetric:'km/h · metres · °C',unitImperial:'mph · feet · °F'
+}};
+let LANG='nl',UNITS='kmh';
+const T=k=>(LANG==='en'&&I18N.en[k])?I18N.en[k]:null;
+function applyLang(){document.querySelectorAll('[data-t]').forEach(el=>{const v=T(el.dataset.t);if(v!==null)el.textContent=v;else if(el.dataset.orig!==undefined)el.textContent=el.dataset.orig;});
+  document.documentElement.lang=LANG;}
+function snapOrig(){document.querySelectorAll('[data-t]').forEach(el=>{if(el.dataset.orig===undefined)el.dataset.orig=el.textContent;});}
+const tt=(k,nl)=>{const v=T(k);return v!==null?v:nl;};
+// eenheden
+const spd=ms=>UNITS==='mph'?{v:ms*2.23694,u:'mph'}:{v:ms*3.6,u:'km/u'};
+const dist=m=>UNITS==='mph'?{v:m*3.28084,u:'ft'}:{v:m,u:'m'};
+const tempU=c=>UNITS==='mph'?{v:c*9/5+32,u:'°F'}:{v:c,u:'°C'};
 const fmtBytes=b=>{if(b==null)return'–';const u=['B','KB','MB','GB','TB'];let i=0;b=+b;while(b>=1024&&i<u.length-1){b/=1024;i++}return b.toFixed(b<10&&i>0?1:0)+' '+u[i]};
 const fmtDur=s=>{s=Math.floor(s);const d=Math.floor(s/86400);s%=86400;const h=Math.floor(s/3600);s%=3600;const m=Math.floor(s/60);return(d?d+'d ':'')+h+'u '+m+'m'};
 async function jget(u){const r=await fetch(u,{cache:'no-store'});if(!r.ok)throw new Error(r.status);return r.json()}
@@ -308,7 +362,7 @@ async function tick(){
     $('fw').textContent=info.api_version||'–';
     $('apiv').textContent=info.api_version||'–';
     const healthy=ping.healthy;
-    $('healthDot').innerHTML='<span class="dot '+(healthy?'ok':'err')+'"></span>'+(healthy?'gezond':'probleem');
+    $('healthDot').innerHTML='<span class="dot '+(healthy?'ok':'err')+'"></span>'+(healthy?tt('healthy','gezond'):tt('problem','probleem'));
     // ping-details
     $('session').textContent=ping.sessionId||'–';
     $('serial').textContent=(ping.serial||'').replace(/_+$/,'')||'–';
@@ -321,19 +375,20 @@ async function tick(){
         '<div class="led"><div class="ring" style="background:'+(col[v]||'#39506e')+';border-color:'+(col[v]||'#263248')+'"></div><span>'+k.replace('LED','')+'</span></div>').join('');}
     // gps
     const fix=(gps.fix||'none');
-    const fp=$('fixPill');fp.textContent=fix==='none'?'geen fix':fix;
+    const fp=$('fixPill');fp.textContent=fix==='none'?tt('noFix','geen fix'):fix;
     fp.className='pill '+(fix==='3D'?'g':fix==='2D'?'y':'r');
     $('lat').textContent=gps.latitude!=null?gps.latitude.toFixed(7):'–';
     $('lon').textContent=gps.longitude!=null?gps.longitude.toFixed(7):'–';
-    if(gps.satellites)$('sats').textContent=(gps.satellites.used??'?')+' gebruikt / '+(gps.satellites.seen??'?')+' zichtbaar';
-    $('speed').textContent=gps.speed!=null?(gps.speed*3.6).toFixed(1)+' km/u':'–';
+    if(gps.satellites)$('sats').textContent=(gps.satellites.used??'?')+' '+tt('ofWhich','gebruikt')+' / '+(gps.satellites.seen??'?')+' '+tt('visible','zichtbaar');
+    if(gps.speed!=null){const s=spd(gps.speed);$('speed').textContent=s.v.toFixed(1)+' '+s.u;}else $('speed').textContent='–';
     $('heading').textContent=gps.heading!=null?gps.heading.toFixed(0)+'°':'–';
-    $('alt').textContent=gps.height!=null?gps.height.toFixed(0)+' m':'–';
-    $('acc').textContent=(gps.horizontal_accuracy!=null?gps.horizontal_accuracy.toFixed(1):'?')+' / '+(gps.vertical_accuracy!=null?gps.vertical_accuracy.toFixed(1):'?')+' m';
-    $('ttff').textContent=(gps.ttff&&gps.ttff<1e12)?(gps.ttff/1000).toFixed(0)+' s':'geen';
+    if(gps.height!=null){const a=dist(gps.height);$('alt').textContent=a.v.toFixed(0)+' '+a.u;}else $('alt').textContent='–';
+    const ah=gps.horizontal_accuracy!=null?dist(gps.horizontal_accuracy):null,av=gps.vertical_accuracy!=null?dist(gps.vertical_accuracy):null;
+    $('acc').textContent=(ah?ah.v.toFixed(1):'?')+' / '+(av?av.v.toFixed(1):'?')+' '+(ah?ah.u:'m');
+    $('ttff').textContent=(gps.ttff&&gps.ttff<1e12)?(gps.ttff/1000).toFixed(0)+' s':tt('none','geen');
     if(gps.latitude&&gps.longitude&&fix!=='none')
-      $('mapLink').innerHTML='📍 <a href="https://www.openstreetmap.org/?mlat='+gps.latitude+'&mlon='+gps.longitude+'#map=17/'+gps.latitude+'/'+gps.longitude+'" target="_blank">Toon op kaart</a>';
-    else $('mapLink').innerHTML='<span class="muted">geen positie-fix (binnen / weinig zicht)</span>';
+      $('mapLink').innerHTML='📍 <a href="https://www.openstreetmap.org/?mlat='+gps.latitude+'&mlon='+gps.longitude+'#map=17/'+gps.latitude+'/'+gps.longitude+'" target="_blank">'+tt('showMap','Toon op kaart')+'</a>';
+    else $('mapLink').innerHTML='<span class="muted">'+tt('noPos','geen positie-fix (binnen / weinig zicht)')+'</span>';
     if(gps.dop)$('dop').innerHTML=['hdop','vdop','pdop','gdop'].map(k=>'<div><b>'+(gps.dop[k]>=99?'∞':gps.dop[k].toFixed(1))+'</b><span>'+k+'</span></div>').join('');
     $('gga').textContent=gps.gga||'–';
     // rf
@@ -359,7 +414,7 @@ async function tickSys(){
   try{
     const s=await jget('/sys.json');
     $('uptime').textContent=fmtDur(s.uptime_s);
-    $('temp').textContent=$('temp2').textContent=(s.temp_c!=null?s.temp_c+' °C':'–');
+    if(s.temp_c!=null){const t=tempU(s.temp_c);$('temp').textContent=$('temp2').textContent=t.v.toFixed(1)+' '+t.u;}else $('temp').textContent=$('temp2').textContent='–';
     $('mhz').textContent=(s.cpu_mhz?s.cpu_mhz+' MHz':'–')+(s.governor?' · '+s.governor:'');
     // CPU-gebruik totaal + per core
     if(s.cpu){const all=s.cpu.cpu;if(all!=null){$('cpuAll').textContent=all+' %';$('cpuAllBar').style.width=all+'%';$('cpuAllWrap').className='bar'+(all>85?' hot':'');}
@@ -401,7 +456,7 @@ async function tickSlow(){
     ]);
     $('res').textContent=cfg.resolution||'–';
     $('config').textContent=JSON.stringify(cfg,null,2);
-    $('cfgSummary').textContent='Alle instellingen ('+Object.keys(cfg).length+' sleutels)';
+    $('cfgSummary').textContent=tt('allSettings','Alle instellingen')+' ('+Object.keys(cfg).length+')';
     $('gpslogs').textContent=Array.isArray(gpsL)?gpsL.length+' bestanden':'–';
     $('imulogs').textContent=Array.isArray(imuL)?imuL.length+' bestanden':'–';
     $('fkm').textContent=fkm.bytes!=null?fmtBytes(fkm.bytes):'–';
@@ -443,22 +498,25 @@ async function tickImu(){
     if(d.peak_g>gPeakHold)gPeakHold=d.peak_g;
     $('gpeak').textContent=gPeakHold.toFixed(2)+' g';
     $('tilt').textContent='pitch '+d.pitch.toFixed(1)+'°  roll '+d.roll.toFixed(1)+'°';
-    $('imuTemp').textContent=(d.temp!=null?d.temp.toFixed(1)+' °C':'–');
+    if(d.temp!=null){const t=tempU(d.temp);$('imuTemp').textContent=t.v.toFixed(1)+' '+t.u;}else $('imuTemp').textContent='–';
     // schok-detectie: afwijking van 1g of hoge rotatie
     const dev=Math.abs(d.peak_g-1);
     const shock=dev>0.35||d.peak_gyro>60;
     const sp=$('shockPill');
-    if(shock){sp.textContent='BEWEGING!';sp.className='pill r';$('imuCard').classList.remove('shock');void $('imuCard').offsetWidth;$('imuCard').classList.add('shock');}
-    else{sp.textContent='rustig';sp.className='pill g';}
+    if(shock){sp.textContent=tt('moving','BEWEGING!');sp.className='pill r';$('imuCard').classList.remove('shock');void $('imuCard').offsetWidth;$('imuCard').classList.add('shock');}
+    else{sp.textContent=tt('calm','rustig');sp.className='pill g';}
     drawScope(d.hist);
   }catch(e){}
 }
 
 // ---- LED-bediening ----
-const LED_FNS=[['uit','Uit'],['opname','Opname (ademend rood)'],['gps','GPS-fix (groen=3D)'],['beweging','Beweging / schok'],['temp','CPU-temp'],['snelheid','Snelheid'],['rood','Vaste kleur: rood'],['groen','Vaste kleur: groen'],['blauw','Vaste kleur: blauw'],['geel','Vaste kleur: geel'],['wit','Vaste kleur: wit'],['paars','Vaste kleur: paars']];
+const LED_NL=[['uit','Uit'],['opname','Opname (ademend rood)'],['gps','GPS-fix (groen=3D)'],['beweging','Beweging / schok'],['temp','CPU-temp'],['snelheid','Snelheid'],['rood','Vaste kleur: rood'],['groen','Vaste kleur: groen'],['blauw','Vaste kleur: blauw'],['geel','Vaste kleur: geel'],['wit','Vaste kleur: wit'],['paars','Vaste kleur: paars']];
+const LED_EN=[['uit','Off'],['opname','Recording (breathing red)'],['gps','GPS fix (green=3D)'],['beweging','Motion / shock'],['temp','CPU temp'],['snelheid','Speed'],['rood','Fixed colour: red'],['groen','Fixed colour: green'],['blauw','Fixed colour: blue'],['geel','Fixed colour: yellow'],['wit','Fixed colour: white'],['paars','Fixed colour: purple']];
+const LED_FNS=LED_NL;
 const LED_SW={uit:'#222',opname:'#ff4d4d',rood:'#ff4d4d',groen:'#3fb950',blauw:'#4dabf7',geel:'#f5d90a',wit:'#eee',paars:'#b197fc',gps:'#3fb950',beweging:'#ff4d4d',temp:'#f5d90a',snelheid:'#4dabf7'};
 function fillLedSelects(){
-  for(let i=0;i<3;i++){const s=$('ledfn'+i);s.innerHTML=LED_FNS.map(([v,t])=>'<option value="'+v+'">'+t+'</option>').join('');
+  const FNS=LANG==='en'?LED_EN:LED_NL;
+  for(let i=0;i<3;i++){const s=$('ledfn'+i);s.innerHTML=FNS.map(([v,t])=>'<option value="'+v+'">'+t+'</option>').join('');
     s.onchange=()=>{$('sw'+i).style.background=LED_SW[s.value]||'#222';fetch('/led/fn?i='+i+'&fn='+encodeURIComponent(s.value)).then(loadLedState);};}
   $('ledDashcam').onclick=()=>fetch('/led/mode?set=dashcam').then(loadLedState);
   $('ledSelf').onclick=()=>fetch('/led/mode?set=dashboard').then(loadLedState);
@@ -471,8 +529,7 @@ async function loadLedState(){try{const d=await jget('/led/state');
 }catch(e){}}
 
 // ---- Tabbladen ----
-const TABMAP={'Systeem':'sys','Opslag':'sys','Services':'sys','Status-LEDs':'sys','Netwerk':'sys','Data & opnames':'sys','Firmware-slots':'sys','Volledige configuratie':'sys','LED-bediening':'settings','Opname-recorder':'settings','Opnames':'terug','Video-opnames':'terug'};
-function assignTabs(){document.querySelectorAll('.card').forEach(c=>{const h=c.querySelector('h2');const t=h?h.textContent.trim():'';let tab='live';for(const k in TABMAP){if(t.indexOf(k)===0){tab=TABMAP[k];break;}}c.dataset.tab=tab;});}
+function assignTabs(){document.querySelectorAll('.card').forEach(c=>{if(!c.dataset.tab)c.dataset.tab='live';});}
 function showTab(tab){document.querySelectorAll('.card').forEach(c=>c.classList.toggle('hidden',(c.dataset.tab||'live')!==tab));
   document.querySelectorAll('.tabbtn').forEach(b=>b.classList.toggle('on',b.dataset.tab===tab));
   if(tab==='terug'){loadRecordings();loadClips();}
@@ -481,19 +538,28 @@ document.querySelectorAll('.tabbtn').forEach(b=>b.onclick=()=>showTab(b.dataset.
 
 // ---- Recorder ----
 async function loadRec(){try{const d=await jget('/rec/status');const run=d.running;
-  $('recPill').textContent=run?'opname loopt':(d.standalone?'camera uit':'Hivemapper');
+  $('recPill').textContent=run?tt('recRunning','opname loopt'):(d.standalone?tt('camOff','camera uit'):tt('stock','Hivemapper'));
   $('recPill').className='pill '+(run?'g':(d.standalone?'y':'b'));
-  $('recStat').textContent=run?('opnemen '+d.w+'×'+d.h+' @'+d.fps):(d.standalone?'standalone, opname uit':'Hivemapper actief');
-  $('recClips').textContent=d.clips+' clips · '+fmtBytes(d.bytes);
+  $('recStat').textContent=run?(tt('recordingAt','opnemen')+' '+d.w+'×'+d.h+' @'+d.fps):(d.standalone?tt('standaloneIdle','standalone, opname uit'):tt('stockActive','Hivemapper actief'));
+  $('recClips').textContent=d.clips+' '+tt('clips','clips')+' · '+fmtBytes(d.bytes)+(d.locked?'  ·  🔒 '+d.locked:'');
   $('recStart').className='ledbtn'+(run?' on':'');$('recStop').className='ledbtn'+(!run&&d.standalone?' on':'');
   if(d.err){$('recErr').style.display='block';$('recErr').textContent='⚠ '+d.err;}else{$('recErr').style.display='none';}
-  if($('recSeg').dataset.init!=='1'){$('recSeg').value=d.seg;$('recCap').value=d.cap_gb;$('recSeg').dataset.init='1';}
+  if($('recSeg').dataset.init!=='1'){$('recSeg').value=d.seg;$('recCap').value=d.cap_gb;$('recG').value=String(d.gforce??2);$('recSeg').dataset.init='1';}
 }catch(e){}}
-$('recStart').onclick=async()=>{$('recStat').textContent='camera vrijmaken…';await fetch('/rec/start');setTimeout(loadRec,8000);};
-$('recStop').onclick=async()=>{$('recStat').textContent='opname stoppen…';await fetch('/rec/stop');setTimeout(loadRec,2500);};
-$('recHive').onclick=async()=>{if(!confirm('Hivemapper-camera herstellen (standalone verlaten)?'))return;$('recStat').textContent='herstellen…';await fetch('/rec/hivemapper');setTimeout(loadRec,3000);};
+$('recStart').onclick=async()=>{$('recStat').textContent=tt('freeing','camera vrijmaken…');await fetch('/rec/start');setTimeout(loadRec,8000);};
+$('recStop').onclick=async()=>{$('recStat').textContent=tt('stopping','opname stoppen…');await fetch('/rec/stop');setTimeout(loadRec,2500);};
+$('recHive').onclick=async()=>{if(!confirm(tt('confirmHive','Hivemapper-camera herstellen (standalone verlaten)?')))return;$('recStat').textContent=tt('restoring','herstellen…');await fetch('/rec/hivemapper');setTimeout(loadRec,3000);};
 $('recSeg').onchange=()=>fetch('/rec/set?seg='+$('recSeg').value);
 $('recCap').onchange=()=>fetch('/rec/set?cap_gb='+$('recCap').value);
+$('recG').onchange=()=>fetch('/rec/set?gforce='+$('recG').value);
+
+// ---- Voorkeuren (taal + eenheden) ----
+async function loadPrefs(){try{const d=await jget('/ui/get');LANG=d.lang||'en';UNITS=d.units||'kmh';
+  $('uiLang').value=LANG;$('uiUnits').value=UNITS;applyLang();fillLedSelects();loadLedState();
+}catch(e){}}
+$('uiLang').onchange=async()=>{LANG=$('uiLang').value;applyLang();fillLedSelects();loadLedState();
+  await fetch('/ui/set?lang='+LANG);loadRec();loadClips();tick();};
+$('uiUnits').onchange=async()=>{UNITS=$('uiUnits').value;await fetch('/ui/set?units='+UNITS);tick();tickSys();};
 
 // ---- Video-clips ----
 function playClip(n,label){const v=$('clipVideo');v.pause();v.innerHTML='';v.removeAttribute('src');
@@ -506,21 +572,25 @@ function playClip(n,label){const v=$('clipVideo');v.pause();v.innerHTML='';v.rem
   $('clipPlayer').scrollIntoView({behavior:'smooth',block:'nearest'});}
 async function loadClips(){try{const list=await jget('/clips.json');
   const tot=list.reduce((a,c)=>a+(c.size||0),0);
-  $('clipCount').textContent=(list.length||0)+' clips · '+fmtBytes(tot);
-  if(!list.length){$('clipGallery').innerHTML='<span class="muted">nog geen video-clips — start de opname in Instellingen</span>';return;}
+  const loc=LANG==='en'?'en-GB':'nl-NL';
+  $('clipCount').textContent=(list.length||0)+' '+tt('clips','clips')+' · '+fmtBytes(tot);
+  if(!list.length){$('clipGallery').innerHTML='<span class="muted">'+tt('noClips','nog geen video-clips — start de opname in Instellingen')+'</span>';return;}
   $('clipGallery').innerHTML=list.map(c=>{const dt=new Date(c.mtime);
-    const d=dt.toLocaleDateString('nl-NL',{weekday:'short',day:'2-digit',month:'short'});
-    const t=dt.toLocaleTimeString('nl-NL',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    const d=dt.toLocaleDateString(loc,{weekday:'short',day:'2-digit',month:'short'});
+    const t=dt.toLocaleTimeString(loc,{hour:'2-digit',minute:'2-digit',second:'2-digit'});
     const lbl=d+' '+t;
-    return '<div class="cliprow">'+
-      '<div class="clipmeta"><b>'+t+'</b> <span class="muted">· '+d+' · '+fmtBytes(c.size)+'</span></div>'+
+    return '<div class="cliprow'+(c.locked?' lockedrow':'')+'">'+
+      '<div class="clipmeta">'+(c.locked?'<span title="'+tt('locked','beschermd')+'">🔒 </span>':'')+
+      '<b>'+t+'</b> <span class="muted">· '+d+' · '+fmtBytes(c.size)+'</span></div>'+
       '<div class="clipbtns">'+
       '<button class="clipbtn play" onclick="playClip(\''+c.name+'\',\''+lbl+'\')">▶</button>'+
-      '<a class="clipbtn" href="/clip?name='+encodeURIComponent(c.name)+'" download="'+c.name+'">download</a>'+
-      '<button class="clipbtn del" onclick="delClip(\''+c.name+'\')">wis</button>'+
+      '<button class="clipbtn'+(c.locked?' lockon':'')+'" onclick="toggleLock(\''+c.name+'\','+(c.locked?1:0)+')" title="'+tt('lock','lock')+'">'+(c.locked?'🔓':'🔒')+'</button>'+
+      '<a class="clipbtn" href="/clip?name='+encodeURIComponent(c.name)+'" download="'+c.name+'">'+tt('download','download')+'</a>'+
+      '<button class="clipbtn del" onclick="delClip(\''+c.name+'\')">'+tt('del','wis')+'</button>'+
       '</div></div>';}).join('');
 }catch(e){}}
-async function delClip(n){if(!confirm('Deze clip verwijderen?'))return;await fetch('/clip_del?name='+encodeURIComponent(n));loadClips();}
+async function delClip(n){if(!confirm(tt('confirmDel','Deze clip verwijderen?')))return;await fetch('/clip_del?name='+encodeURIComponent(n));loadClips();}
+async function toggleLock(n,isLocked){await fetch((isLocked?'/clip_unlock?name=':'/clip_lock?name=')+encodeURIComponent(n));loadClips();loadRec();}
 
 // ---- Opnames-galerij ----
 async function loadRecordings(){try{const list=await jget('/api/1/recordings');
@@ -539,9 +609,9 @@ async function loadRecordings(){try{const list=await jget('/api/1/recordings');
 async function delRec(n){if(!confirm('Dit beeld verwijderen?'))return;await fetch('/rec_del?name='+encodeURIComponent(n));loadRecordings();}
 $('recRefresh').onclick=loadRecordings;
 
-function clock(){$('clock').textContent=new Date().toLocaleTimeString('nl-NL');}
-assignTabs();showTab('live');
-fillLedSelects();loadLedState();loadRec();
+function clock(){$('clock').textContent=new Date().toLocaleTimeString(LANG==='en'?'en-GB':'nl-NL');}
+snapOrig();assignTabs();showTab('live');
+fillLedSelects();loadLedState();loadRec();loadPrefs();
 tick();tickSys();tickSlow();tickImu();tickFrame();clock();
 setInterval(tick,1500);setInterval(tickFrame,1500);setInterval(tickSys,4000);setInterval(tickSlow,15000);setInterval(clock,1000);
 setInterval(tickImu,200);setInterval(loadRec,5000);

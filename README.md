@@ -24,6 +24,8 @@ Open **[`demo.html`](demo.html)** in any browser (download it, or clone and doub
 - **The clock sets itself from GPS.** No internet, no battery clock needed — the moment there's a fix, timestamps are correct.
 - **The three status LEDs are yours.** Pick a function per LED: GPS-fix, motion, CPU temperature, speed, a fixed colour, or a slow *breathing* red that shows you it's recording.
 - **Automatic retention.** Set a storage limit; the oldest clips are deleted to make room. Set-and-forget loop recording, exactly like a commercial dashcam.
+- **Incident lock.** An impact or hard stop above your chosen G-threshold automatically protects that clip 🔒 — it's never overwritten by the loop. You can lock or unlock any clip by hand too.
+- **English or Dutch, metric or imperial.** Switch the whole interface between EN/NL and between km/h·m·°C and mph·ft·°F. The GPS overlay in new recordings follows your choice.
 - **It just starts.** Give it power and it boots straight into recording — perfect for wiring into a car. Survives reboots, no login, no button.
 
 It's light: the dashboard sits around 0–6% of one CPU core and ~28&nbsp;MB of RAM.
@@ -99,7 +101,10 @@ This is a hobby project shared as-is. A few honest notes:
 ## Roadmap
 
 - [x] GPS overlay on playback via synced subtitles — an `.srt` next to every clip (plays in VLC & most dashcam viewers) and a live overlay in the dashboard's own player
+- [x] Incident lock — protect clips automatically on impact (G-sensor) or by hand
+- [x] English/Dutch interface and metric/imperial units
 - [ ] Day/night exposure profiles in the UI
+- [ ] Live preview while recording
 - [ ] Optional push of clips/telemetry to Home Assistant when it's on a network with internet
 - [ ] Motion / parking mode using the G-sensor
 
