@@ -31,6 +31,13 @@ GPS position and G-sensor data are logged alongside the video in `clips/track.nd
 
 **Playback** lists your clips, newest first, with time and size. Hit ▶ to play one in the player at the top, or download / delete it. Delete asks first.
 
+With more than a handful of clips, one-by-one deleting gets old fast, so Playback also has:
+
+- **Filter** — All / 🔒 Locked / Unlocked, to quickly narrow a long list
+- **Select all** + per-clip checkboxes, then **delete selected**
+- **Delete all** — removes every *unlocked* clip in one go (locked ones are always kept); asks for confirmation with a count
+- **Show more** — the list loads 50 at a time so it stays fast even with hundreds of recordings
+
 Each clip has a synced **GPS overlay** — time, position, speed and heading — shown over the video in the dashboard player (toggle it with the CC button). The same data is saved as a standard `.srt` next to the clip, so VLC and most dashcam viewers show it too when you download a clip.
 
 ## The status LEDs

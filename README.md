@@ -82,7 +82,7 @@ More detail in **[docs/HOWTO.md](docs/HOWTO.md)**.
 | Tab | What's in it |
 |-----|--------------|
 | **Live** | Camera image, GPS/GNSS, RF & anti-jamming telemetry, and a live IMU oscilloscope with G-force peak-hold |
-| **Playback** | Your clips as a clean list — play, download or delete |
+| **Playback** | Your clips as a clean list — play, download, lock/unlock, filter, multi-select and bulk-delete |
 | **Settings** | Start/stop recording, segment length, storage limit, and per-LED functions |
 | **System** | CPU, temperature, memory, storage, services, network, firmware slots, full config |
 

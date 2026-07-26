@@ -76,6 +76,12 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
 .clipbtn.del{background:#3d1414;color:#f87171;border-color:#5a1c1c}
 .clipbtn.lockon{background:#3b2f0c;border-color:#5c4a12}
 .cliprow.lockedrow{background:linear-gradient(90deg,rgba(210,153,34,.10),transparent 60%);border-left:3px solid var(--warn)}
+.cliptoolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--bd)}
+.segbtns{display:flex;gap:4px;background:var(--card2);padding:3px;border-radius:8px}
+.segbtn{background:transparent;border:0;color:var(--mut);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px}
+.segbtn.on{background:#0d3a63;color:#9fd0ff}
+.selall{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--mut);cursor:pointer}
+.cliprow .selchk{margin-right:2px}
 @media(max-width:600px){.clipbtn{padding:5px 7px;font-size:11px}}
 .ledswatch{width:14px;height:14px;border-radius:50%;border:1px solid #3a465c;flex:none}
 @media(max-width:700px){.card.span2{grid-column:span 1}.imugrid{grid-template-columns:1fr}.acol.center{border-left:0;padding-left:0;border-top:1px solid var(--bd);padding-top:10px}}
@@ -141,17 +147,24 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
     </div>
   </div>
 
-  <div class="card span2" data-tab="none" style="display:none"><h2>Opnames <span id="recCount" class="muted" style="font-weight:400"></span></h2><div class="body">
-    <div style="display:flex;gap:8px;margin-bottom:10px"><button class="ledbtn" id="recRefresh" style="flex:none;padding:6px 12px">Vernieuwen</button></div>
-    <div id="recGallery" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px"></div>
-  </div></div>
-
   <div class="card span2" data-tab="terug"><h2><span data-t="cClips">Video-opnames</span> <span id="clipCount" class="muted" style="font-weight:400"></span></h2><div class="body">
     <div id="clipPlayer" style="display:none;margin-bottom:12px">
       <video id="clipVideo" controls autoplay playsinline style="width:100%;max-height:52vh;background:#000;border-radius:8px;display:block"></video>
       <div class="muted" id="clipNow" style="font-size:11px;margin-top:4px"></div>
     </div>
+    <div class="cliptoolbar">
+      <div class="segbtns">
+        <button class="segbtn on" id="filtAll" data-t="filterAll">Alles</button>
+        <button class="segbtn" id="filtLocked" data-t="filterLocked">🔒 Vergrendeld</button>
+        <button class="segbtn" id="filtUnlocked" data-t="filterUnlocked">Onvergrendeld</button>
+      </div>
+      <div style="flex:1"></div>
+      <label class="selall"><input type="checkbox" id="selAll"> <span data-t="selectAll">selecteer alles</span></label>
+      <button class="clipbtn del" id="btnDelSel" style="display:none" data-t="delSelected">wis selectie</button>
+      <button class="clipbtn del" id="btnDelAll" data-t="delAll">wis alles</button>
+    </div>
     <div id="clipGallery"></div>
+    <div style="text-align:center;margin-top:10px"><button class="ledbtn" id="clipMore" style="display:none" data-t="showMore">Toon meer</button></div>
   </div></div>
 
   <div class="card" data-tab="settings"><h2><span data-t="cRecorder">Opname-recorder</span> <span id="recPill" class="pill b">–</span></h2><div class="body">
@@ -332,7 +345,11 @@ const I18N={nl:{},en:{
  freeing:'freeing camera…',stopping:'stopping…',restoring:'restoring…',
  noPos:'no position fix (indoors / poor sky view)',showMap:'Show on map',ofWhich:'used',visible:'visible',
  subsOn:'GPS overlay on (CC button toggles)',none:'none',
- healthy:'healthy',problem:'problem',unitMetric:'km/h · metres · °C',unitImperial:'mph · feet · °F'
+ healthy:'healthy',problem:'problem',unitMetric:'km/h · metres · °C',unitImperial:'mph · feet · °F',
+ filterAll:'All',filterLocked:'🔒 Locked',filterUnlocked:'Unlocked',selectAll:'select all',
+ delSelected:'delete selected',delAll:'delete all',showMore:'Show more',
+ confirmDelAll:'Delete all unlocked clips? Locked clips are kept.',confirmDelSel:'Delete the selected clips?',
+ noneMatch:'no recordings match this filter',deleted:'deleted'
 }};
 let LANG='nl',UNITS='kmh';
 const T=k=>(LANG==='en'&&I18N.en[k])?I18N.en[k]:null;
@@ -532,7 +549,7 @@ async function loadLedState(){try{const d=await jget('/led/state');
 function assignTabs(){document.querySelectorAll('.card').forEach(c=>{if(!c.dataset.tab)c.dataset.tab='live';});}
 function showTab(tab){document.querySelectorAll('.card').forEach(c=>c.classList.toggle('hidden',(c.dataset.tab||'live')!==tab));
   document.querySelectorAll('.tabbtn').forEach(b=>b.classList.toggle('on',b.dataset.tab===tab));
-  if(tab==='terug'){loadRecordings();loadClips();}
+  if(tab==='terug'){loadClips();}
   if(tab==='settings'){loadRec();loadLedState();}}
 document.querySelectorAll('.tabbtn').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 
@@ -568,18 +585,31 @@ function playClip(n,label){const v=$('clipVideo');v.pause();v.innerHTML='';v.rem
   const showSubs=()=>{try{if(v.textTracks&&v.textTracks[0])v.textTracks[0].mode='showing';}catch(e){}};
   v.addEventListener('loadeddata',showSubs,{once:true});
   v.load();v.play().then(showSubs).catch(()=>{});
-  $('clipPlayer').style.display='block';$('clipNow').textContent='▶ '+(label||n)+'  ·  GPS-overlay aan (CC-knop = aan/uit)';
+  $('clipPlayer').style.display='block';$('clipNow').textContent='▶ '+(label||n)+'  ·  '+tt('subsOn','GPS-overlay aan (CC-knop = aan/uit)');
   $('clipPlayer').scrollIntoView({behavior:'smooth',block:'nearest'});}
-async function loadClips(){try{const list=await jget('/clips.json');
-  const tot=list.reduce((a,c)=>a+(c.size||0),0);
+
+// ---- Terugkijken: filter, selectie, paginering, bulkacties ----
+let CLIPS_ALL=[],CLIP_FILTER='all',CLIP_SHOWN=50,CLIP_SEL=new Set();
+const CLIP_PAGE=50;
+function clipsFiltered(){if(CLIP_FILTER==='locked')return CLIPS_ALL.filter(c=>c.locked);
+  if(CLIP_FILTER==='unlocked')return CLIPS_ALL.filter(c=>!c.locked);return CLIPS_ALL;}
+async function loadClips(){try{CLIPS_ALL=await jget('/clips.json');renderClips();}catch(e){}}
+function renderClips(){
+  const list=clipsFiltered();
+  const tot=CLIPS_ALL.reduce((a,c)=>a+(c.size||0),0);
   const loc=LANG==='en'?'en-GB':'nl-NL';
-  $('clipCount').textContent=(list.length||0)+' '+tt('clips','clips')+' · '+fmtBytes(tot);
-  if(!list.length){$('clipGallery').innerHTML='<span class="muted">'+tt('noClips','nog geen video-clips — start de opname in Instellingen')+'</span>';return;}
-  $('clipGallery').innerHTML=list.map(c=>{const dt=new Date(c.mtime);
+  $('clipCount').textContent=(CLIPS_ALL.length||0)+' '+tt('clips','clips')+' · '+fmtBytes(tot);
+  const unlockedCount=CLIPS_ALL.filter(c=>!c.locked).length;
+  $('btnDelAll').style.display=unlockedCount?'':'none';
+  if(!list.length){$('clipGallery').innerHTML='<span class="muted">'+(CLIPS_ALL.length?tt('noneMatch','geen opnames binnen dit filter'):tt('noClips','nog geen video-clips — start de opname in Instellingen'))+'</span>';
+    $('clipMore').style.display='none';return;}
+  const shown=list.slice(0,CLIP_SHOWN);
+  $('clipGallery').innerHTML=shown.map(c=>{const dt=new Date(c.mtime);
     const d=dt.toLocaleDateString(loc,{weekday:'short',day:'2-digit',month:'short'});
     const t=dt.toLocaleTimeString(loc,{hour:'2-digit',minute:'2-digit',second:'2-digit'});
     const lbl=d+' '+t;
     return '<div class="cliprow'+(c.locked?' lockedrow':'')+'">'+
+      (c.locked?'<span style="width:16px;display:inline-block"></span>':'<input type="checkbox" class="selchk" data-name="'+c.name+'" '+(CLIP_SEL.has(c.name)?'checked':'')+'>')+
       '<div class="clipmeta">'+(c.locked?'<span title="'+tt('locked','beschermd')+'">🔒 </span>':'')+
       '<b>'+t+'</b> <span class="muted">· '+d+' · '+fmtBytes(c.size)+'</span></div>'+
       '<div class="clipbtns">'+
@@ -588,26 +618,24 @@ async function loadClips(){try{const list=await jget('/clips.json');
       '<a class="clipbtn" href="/clip?name='+encodeURIComponent(c.name)+'" download="'+c.name+'">'+tt('download','download')+'</a>'+
       '<button class="clipbtn del" onclick="delClip(\''+c.name+'\')">'+tt('del','wis')+'</button>'+
       '</div></div>';}).join('');
-}catch(e){}}
+  $('clipMore').style.display=(list.length>CLIP_SHOWN)?'':'none';
+  document.querySelectorAll('.selchk').forEach(cb=>cb.onchange=()=>{cb.checked?CLIP_SEL.add(cb.dataset.name):CLIP_SEL.delete(cb.dataset.name);updateSelBar();});
+  updateSelBar();
+}
+function updateSelBar(){const n=CLIP_SEL.size;$('btnDelSel').style.display=n?'':'none';
+  if(n)$('btnDelSel').textContent=tt('delSelected','wis selectie')+' ('+n+')';}
+$('clipMore').onclick=()=>{CLIP_SHOWN+=CLIP_PAGE;renderClips();};
+['filtAll','filtLocked','filtUnlocked'].forEach(id=>{$(id).onclick=()=>{
+  document.querySelectorAll('.segbtn').forEach(b=>b.classList.remove('on'));$(id).classList.add('on');
+  CLIP_FILTER=id==='filtAll'?'all':(id==='filtLocked'?'locked':'unlocked');CLIP_SHOWN=CLIP_PAGE;CLIP_SEL.clear();renderClips();};});
+$('selAll').onchange=()=>{const list=clipsFiltered().slice(0,CLIP_SHOWN).filter(c=>!c.locked);
+  if($('selAll').checked)list.forEach(c=>CLIP_SEL.add(c.name));else CLIP_SEL.clear();renderClips();};
+$('btnDelSel').onclick=async()=>{if(!CLIP_SEL.size)return;if(!confirm(tt('confirmDelSel','De geselecteerde clips verwijderen?')))return;
+  await fetch('/clips/delete_many?names='+encodeURIComponent(Array.from(CLIP_SEL).join(',')));CLIP_SEL.clear();loadClips();};
+$('btnDelAll').onclick=async()=>{if(!confirm(tt('confirmDelAll','Alle onvergrendelde clips verwijderen? Vergrendelde clips blijven staan.')))return;
+  await fetch('/clips/delete_all');CLIP_SEL.clear();loadClips();};
 async function delClip(n){if(!confirm(tt('confirmDel','Deze clip verwijderen?')))return;await fetch('/clip_del?name='+encodeURIComponent(n));loadClips();}
 async function toggleLock(n,isLocked){await fetch((isLocked?'/clip_unlock?name=':'/clip_lock?name=')+encodeURIComponent(n));loadClips();loadRec();}
-
-// ---- Opnames-galerij ----
-async function loadRecordings(){try{const list=await jget('/api/1/recordings');
-  if(!Array.isArray(list)){$('recGallery').innerHTML='<span class="muted">geen opnames</span>';return;}
-  $('recCount').textContent=list.length+' beelden';
-  const recent=list.slice(-16).reverse();
-  if(!recent.length){$('recGallery').innerHTML='<span class="muted">nog geen beelden (camera neemt op bij GPS-lock)</span>';return;}
-  $('recGallery').innerHTML=recent.map(r=>{const n=r.path,ts=new Date(r.date).toLocaleTimeString('nl-NL');
-    return '<div style="background:var(--card2);border-radius:8px;overflow:hidden">'+
-      '<img src="/recframe?name='+encodeURIComponent(n)+'" style="width:100%;aspect-ratio:2/1;object-fit:cover;background:#000" loading="lazy">'+
-      '<div style="padding:6px 8px"><div class="muted" style="font-size:11px">'+ts+'</div>'+
-      '<div style="display:flex;gap:6px;margin-top:5px">'+
-      '<a class="recdl" href="/recframe?name='+encodeURIComponent(n)+'" download="'+n+'">download</a>'+
-      '<button class="recdel" onclick="delRec(\''+n+'\')">wis</button></div></div></div>';}).join('');
-}catch(e){$('recGallery').innerHTML='<span class="err-line">fout bij laden</span>';}}
-async function delRec(n){if(!confirm('Dit beeld verwijderen?'))return;await fetch('/rec_del?name='+encodeURIComponent(n));loadRecordings();}
-$('recRefresh').onclick=loadRecordings;
 
 function clock(){$('clock').textContent=new Date().toLocaleTimeString(LANG==='en'?'en-GB':'nl-NL');}
 snapOrig();assignTabs();showTab('live');

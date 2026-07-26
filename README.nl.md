@@ -78,7 +78,7 @@ Er is niks te compileren. Het is één Python-bestand van ~1300 regels dat allee
 | Tab | Wat erin zit |
 |-----|--------------|
 | **Live** | Camerabeeld, GPS/GNSS, RF- & anti-jamming-telemetrie, en een live IMU-oscilloscoop met G-piek |
-| **Terugkijken** | Je clips als nette lijst — afspelen, downloaden of wissen |
+| **Terugkijken** | Je clips als nette lijst — afspelen, downloaden, vergrendelen, filteren, meerdere selecteren en in bulk wissen |
 | **Instellingen** | Opname start/stop, segmentlengte, opslaglimiet, en functies per LED |
 | **Systeem** | CPU, temperatuur, geheugen, opslag, services, netwerk, firmware-slots, volledige config |
 
