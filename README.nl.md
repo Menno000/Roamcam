@@ -50,7 +50,7 @@ Hij is licht: het dashboard zit rond de 0–6% van één CPU-core en ~28&nbsp;MB
 - De camera en je computer op hetzelfde netwerk. De HDC zet zelf een wifi-accesspoint op (`dashcam`), of je hangt 'm aan je LAN.
 - Vijf minuten.
 
-> Dit is gebouwd en getest op de **HDC**. De nieuwere *Bee* draait andere firmware en wordt nog niet ondersteund — zie [docs/HARDWARE.md](docs/HARDWARE.md).
+> Hivemapper heeft drie hardware-generaties verkocht onder verschillende namen. Dit is gebouwd en getest op de **HDC** (werkt vermoedelijk ook op de **HDC-S**, zelfde basishardware); de nieuwere **Bee** is compleet andere hardware en wordt niet ondersteund. Niet zeker welke jij hebt? **[docs/HARDWARE.md](docs/HARDWARE.md#which-hivemapper-do-i-have)** heeft een vergelijkingstabel en hoe je het checkt.
 
 ---
 
