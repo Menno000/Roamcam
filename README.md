@@ -133,14 +133,28 @@ This is a hobby project shared as-is. A few honest notes:
 
 ## Roadmap
 
-- [x] GPS overlay on playback via synced subtitles — an `.srt` next to every clip (plays in VLC & most dashcam viewers) and a live overlay in the dashboard's own player
-- [x] Incident lock — protect clips automatically on impact (G-sensor) or by hand
-- [x] English/Dutch interface and metric/imperial units
-- [x] Live preview while recording — manual toggle, hardware-decoded, off by default
-- [ ] Day/night exposure profiles in the UI
-- [ ] Optional push of clips/telemetry to Home Assistant when it's on a network with internet
-- [ ] Motion / parking mode using the G-sensor
-- [ ] A companion app for live video and notifications — worth designing properly before building; see [docs/HOWTO.md](docs/HOWTO.md#live-preview) for the groundwork already laid
+### ✅ Works now
+
+- GPS overlay on playback via synced subtitles — an `.srt` next to every clip (plays in VLC & most dashcam viewers) and a live overlay in the dashboard's own player
+- Incident lock — protect clips automatically on impact (G-sensor) or by hand
+- English/Dutch interface and metric/imperial units
+- Live preview while recording — manual toggle, hardware-decoded, off by default
+
+### 🔬 Being explored
+
+Feasibility researched, nothing built yet — see the write-ups linked below before assuming either of these is simple:
+
+- **Self-update mechanism** — a "check for updates" button, blocked on the device usually having no internet by design; groundwork in [docs/HOWTO.md](docs/HOWTO.md#toward-a-self-update-mechanism-not-built-yet--the-groundwork)
+- **LoRa mesh networking** (Meshtastic / MeshCore) — the HDC has an unused LoRa radio; turning it into a mesh node could carry incident alerts or a position beacon with zero Wi-Fi in range, no cloud involved; groundwork in [docs/HOWTO.md](docs/HOWTO.md#toward-lora-mesh-networking-not-built-yet--the-groundwork)
+
+### 💭 Future ideas
+
+Not yet researched — just on the list:
+
+- Day/night exposure profiles in the UI
+- Optional push of clips/telemetry to Home Assistant when it's on a network with internet
+- Motion / parking mode using the G-sensor
+- A companion app for live video and notifications — worth designing properly before building; see [docs/HOWTO.md](docs/HOWTO.md#toward-a-companion-app-not-built-yet--the-groundwork) for the groundwork already laid
 
 Ideas and pull requests welcome.
 

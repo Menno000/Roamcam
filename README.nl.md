@@ -127,6 +127,35 @@ Dit is een hobbyproject, gedeeld zoals het is. Een paar eerlijke opmerkingen:
 
 ---
 
+## Roadmap
+
+### ✅ Werkt nu
+
+- GPS-overlay bij terugkijken via gesynchroniseerde ondertitels — een `.srt` naast elke clip (speelt af in VLC en de meeste dashcam-viewers) en een live overlay in de eigen speler van het dashboard
+- Incident-lock — beschermt clips automatisch bij een klap (G-sensor) of met de hand
+- Engelse/Nederlandse interface en metrisch/imperiaal
+- Live meekijken tijdens opnemen — handmatige knop, hardware-decodering, standaard uit
+
+### 🔬 Wordt onderzocht
+
+Haalbaarheid uitgezocht, nog niets gebouwd — lees eerst de uitwerking hieronder voordat je aanneemt dat dit simpel is:
+
+- **Interne updater** — een "check op updates"-knop, loopt tegen aan dat het toestel meestal bewust geen internet heeft; uitwerking in [docs/HOWTO.md](docs/HOWTO.md#toward-a-self-update-mechanism-not-built-yet--the-groundwork) *(Engels)*
+- **LoRa mesh-netwerk** (Meshtastic / MeshCore) — de HDC heeft een ongebruikte LoRa-radio aan boord; als mesh-node zou die een incident-alert of positie-beacon kunnen versturen zonder wifi in de buurt, zonder cloud; uitwerking in [docs/HOWTO.md](docs/HOWTO.md#toward-lora-mesh-networking-not-built-yet--the-groundwork) *(Engels)*
+
+### 💭 Ideeën voor later
+
+Nog niet uitgezocht — staat gewoon op het lijstje:
+
+- Dag/nacht belichtingsprofielen in de UI
+- Optioneel clips/telemetrie doorsturen naar Home Assistant zodra hij op een netwerk met internet zit
+- Beweging-/parkeermodus met de G-sensor
+- Een companion-app voor live beeld en meldingen — verdient eerst goed doordenken voordat we 'm bouwen; zie [docs/HOWTO.md](docs/HOWTO.md#toward-a-companion-app-not-built-yet--the-groundwork) voor het denkwerk dat al gedaan is *(Engels)*
+
+Ideeën en pull requests zijn welkom.
+
+---
+
 ## Steun dit project ❤️
 
 Ik bouw dit in mijn vrije tijd en geef het gratis weg. Als Roamcam je een dashcam heeft bespaard, of je vindt het gewoon leuk, dan helpt sponsoren echt en houdt het de ontwikkeling gaande:

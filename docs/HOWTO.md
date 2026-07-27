@@ -77,6 +77,28 @@ A phone app for live video (and push notifications on an incident lock, say) is 
 
 None of this needs solving before Roamcam is useful today — it's here so the shape of "an app later" is thought through rather than bolted on.
 
+### Toward a self-update mechanism (not built yet — the groundwork)
+
+Right now, updating means copying a new `dashboard_server.py` over SSH by hand. A "check for updates" button in the dashboard is a natural next step, but it runs into a real constraint worth thinking through first:
+
+- **The device needs internet to check anything**, and by design it usually doesn't have any — it either broadcasts its own isolated `dashcam` Wi-Fi (no uplink) or sits on your LAN, which may or may not have internet. An update check can only ever happen when the camera is, at that moment, on a network with a route out.
+- **Silent background phoning-home is off the table** — it would work against the whole "nothing leaves this device" premise the project is built on. Any update check has to be something the owner triggers or explicitly configures, never automatic in the background over the isolated AP.
+- The most promising shape: an **opt-in "home network"** the owner configures once (SSID + password, entered in the dashboard, same as any other device), combined with either — if the HDC's Wi-Fi chip supports it — running the camera's own AP *and* a home-network client connection at the same time (concurrent AP+STA), so it checks automatically only while parked at home; or, if that's not supported, an explicit "Update now" button that only lights up once the device happens to be on a network with a route out.
+- **Verification matters more than the mechanism.** Whatever fetches a new version needs a published checksum (and ideally a signature) to check before installing it — an update channel is, by definition, a way to push code onto every running Roamcam, so it has to refuse anything that doesn't verify. A failed-to-start new version should automatically roll back to the last-known-good file.
+
+None of this is hard, but it deserves the AP+STA question answered on real hardware before deciding between "automatic at home" and "manual button".
+
+### Toward LoRa mesh networking (not built yet — the groundwork)
+
+The HDC has a LoRa radio on board — stock firmware uses it to relay small data packets to Hivemapper's Helium network when there's no Wi-Fi. Roamcam doesn't touch it today, but repurposing it fits the project's own philosophy well: point-to-point or mesh communication that never touches anyone else's server.
+
+- **[Meshtastic](https://meshtastic.org/)** has a Linux-native daemon, `meshtasticd`, built to run directly on a Raspberry Pi and drive an SPI-connected LoRa radio chip (SX126x/SX127x) — no separate microcontroller needed. If the HDC's LoRa module is wired the same way (a bare radio chip on SPI, not a pre-programmed sub-module with its own firmware), `meshtasticd` could plausibly take it over the same way Roamcam already takes over the camera from the stock capture process.
+- **The open question is the wiring**, not the software: is the chip reachable directly over SPI, or does it sit behind its own co-processor exposing only a higher-level interface? The stock firmware runs a `lorawan-logger` service, which is a good sign — talking to Helium usually means direct register-level access to a Semtech-family chip, which is exactly what `meshtasticd` needs too.
+- **Why this beats a custom radio protocol**: Meshtastic (and its sibling, [MeshCore](https://meshcore.co.uk/), same radios/different protocol) already have free phone apps, existing mesh networks in many areas, GPS position sharing and text messaging built in. Getting Roamcam onto one of them means an incident alert or a location beacon rides on infrastructure that already exists, instead of needing a bespoke receiver.
+- **What it could unlock**: an incident-lock trigger sent as a mesh message the moment it happens, even with zero Wi-Fi in range; a periodic position beacon useful as a private, subscription-free "where's the car" tracker; not a substitute for the dashboard, just an out-of-band channel for the handful of things worth knowing about immediately.
+
+Next real step is hands-on: identify the exact chip and confirm whether the SPI bus is exposed, before any code gets written.
+
 ## The clock
 
 There's no battery-backed clock in this hardware, and no internet in standalone use — so Roamcam sets the system clock from **GPS**. As soon as there's a fix, timestamps (and clip filenames) are correct, to the second. Nothing to configure.
