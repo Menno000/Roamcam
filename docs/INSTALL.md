@@ -57,6 +57,8 @@ http://192.168.0.10:8080
 
 That's it. The **Live** tab shows the camera and sensors. Go to **Settings** to start recording.
 
+*If Roamcam just saved you from buying a dashcam, there's a Sponsor button at the top of the repo — entirely optional, always appreciated.*
+
 ## What the installer actually did
 
 - Copied `dashboard_server.py` to `/mnt/data` — the only partition that survives a reboot on this device.

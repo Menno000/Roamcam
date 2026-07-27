@@ -1,5 +1,8 @@
 # Roamcam
 
+[![License](https://img.shields.io/github/license/Menno000/Roamcam)](LICENSE)
+[![Sponsor](https://img.shields.io/badge/%E2%9D%A4-Sponsor-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Menno000)
+
 **Your Hivemapper dashcam, working for you instead of the network.**
 
 The Hivemapper HDC is a lovely little box: a Raspberry Pi Compute Module 4, a 12&nbsp;MP Sony sensor, GPS, an accelerometer, three RGB LEDs. Out of the box it exists to feed one thing — the Hivemapper map. Roamcam turns it into a plain, private, offline **dashcam** that answers to nobody but you.
