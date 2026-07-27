@@ -145,7 +145,7 @@ This is a hobby project shared as-is. A few honest notes:
 Feasibility researched, nothing built yet — see the write-ups linked below before assuming either of these is simple:
 
 - **Self-update mechanism** — a "check for updates" button, blocked on the device usually having no internet by design; groundwork in [docs/HOWTO.md](docs/HOWTO.md#toward-a-self-update-mechanism-not-built-yet--the-groundwork)
-- **LoRa mesh networking** (Meshtastic / MeshCore) — the HDC has an unused LoRa radio; turning it into a mesh node could carry incident alerts or a position beacon with zero Wi-Fi in range, no cloud involved; groundwork in [docs/HOWTO.md](docs/HOWTO.md#toward-lora-mesh-networking-not-built-yet--the-groundwork)
+- **LoRa connectivity, backend of your choice** — the HDC has an unused LoRa radio; could carry incident alerts or a position beacon with no Wi-Fi in range. Several very different networks could carry that (your own Meshtastic/MeshCore mesh, free community networks like The Things Network, a self-hosted gateway, or a commercial telco) — the plan is to let the owner pick, not bake in one; full comparison in [docs/HOWTO.md](docs/HOWTO.md#toward-lora-mesh-networking-not-built-yet--the-groundwork)
 
 ### 💭 Future ideas
 

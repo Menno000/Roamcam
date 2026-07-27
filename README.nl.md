@@ -141,7 +141,7 @@ Dit is een hobbyproject, gedeeld zoals het is. Een paar eerlijke opmerkingen:
 Haalbaarheid uitgezocht, nog niets gebouwd — lees eerst de uitwerking hieronder voordat je aanneemt dat dit simpel is:
 
 - **Interne updater** — een "check op updates"-knop, loopt tegen aan dat het toestel meestal bewust geen internet heeft; uitwerking in [docs/HOWTO.md](docs/HOWTO.md#toward-a-self-update-mechanism-not-built-yet--the-groundwork) *(Engels)*
-- **LoRa mesh-netwerk** (Meshtastic / MeshCore) — de HDC heeft een ongebruikte LoRa-radio aan boord; als mesh-node zou die een incident-alert of positie-beacon kunnen versturen zonder wifi in de buurt, zonder cloud; uitwerking in [docs/HOWTO.md](docs/HOWTO.md#toward-lora-mesh-networking-not-built-yet--the-groundwork) *(Engels)*
+- **LoRa-connectiviteit, netwerk naar keuze** — de HDC heeft een ongebruikte LoRa-radio aan boord; zou een incident-alert of positie-beacon kunnen versturen zonder wifi in de buurt. Meerdere heel verschillende netwerken kunnen dat dragen (je eigen Meshtastic/MeshCore-mesh, gratis netwerken als The Things Network, een zelf-gehoste gateway, of een commerciële telco) — het plan is de gebruiker te laten kiezen, niet één vast in te bakken; volledige vergelijking in [docs/HOWTO.md](docs/HOWTO.md#toward-lora-mesh-networking-not-built-yet--the-groundwork) *(Engels)*
 
 ### 💭 Ideeën voor later
 

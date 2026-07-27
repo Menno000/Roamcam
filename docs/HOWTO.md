@@ -97,7 +97,23 @@ The HDC has a LoRa radio on board — stock firmware uses it to relay small data
 - **Why this beats a custom radio protocol**: Meshtastic (and its sibling, [MeshCore](https://meshcore.co.uk/), same radios/different protocol) already have free phone apps, existing mesh networks in many areas, GPS position sharing and text messaging built in. Getting Roamcam onto one of them means an incident alert or a location beacon rides on infrastructure that already exists, instead of needing a bespoke receiver.
 - **What it could unlock**: an incident-lock trigger sent as a mesh message the moment it happens, even with zero Wi-Fi in range; a periodic position beacon useful as a private, subscription-free "where's the car" tracker; not a substitute for the dashboard, just an out-of-band channel for the handful of things worth knowing about immediately.
 
-Next real step is hands-on: identify the exact chip and confirm whether the SPI bus is exposed, before any code gets written.
+#### Which network — and why this should be the owner's choice, not ours
+
+Meshtastic/MeshCore aren't the only option, and "LoRa" isn't one network — it's a radio that can talk to several completely different backends, each with a different cost and trust trade-off:
+
+| Option | Coverage | Cost | Who's in the loop | Note |
+|---|---|---|---|---|
+| **Meshtastic / MeshCore** (own mesh) | As far as your own + nearby community nodes reach | One-time, ~€20-50 per extra node | Nobody — no account, anywhere | No coverage guarantee, density-dependent |
+| **The Things Network (TTN)** | Global, dense in EU/NL cities, thin elsewhere | Free, fair-use capped (30 s airtime + 10 downlinks/day) | Non-profit community network, free account required | Best-effort, but nobody's monetizing the data |
+| **Helium IoT Network** | Largest LoRaWAN network worldwide (250k+ gateways), coverage varies a lot by region | Free where coverage exists, needs a Helium Console account | Decentralized (independent gateway operators) | The HDC already talks to this on stock firmware — same SPI-access question applies |
+| **Self-hosted ChirpStack + own gateway** | As far as your own antenna reaches (a few km, more with line of sight) | One-time gateway (~€100-300), near-free to run at hobby scale | Nobody — fully self-hosted | Purest fit for Roamcam's philosophy; coverage is entirely your own responsibility |
+| **KPN Things (Netherlands)** | All of NL | Free for 1 year, then from €1.33/month/license | KPN, business-oriented product | See the trade-offs above — worth reading the actual terms first |
+| **Other national telcos** (Proximus/BE, Swisscom/CH, Orange/FR, Digita/FI, Netzikon/DE, …) | Own country, roaming-interconnected via Actility's hub (25+ countries) | Similar to KPN — commercial, paid after a trial | A telco per country | Only relevant if this goes properly international |
+| **Satellite LoRaWAN** (Lacuna Space, Plan-S, EchoStar) | Everywhere, including ocean and desert — no gateway needed at all | Paid, commercial (no free tier found) | A commercial satellite operator | The "truly anywhere" option, but priced and scoped for industrial IoT, not a dashcam |
+
+No single one of these fits everybody, and picking one for all Roamcam users would mean baking in a specific trust relationship (an account somewhere, a coverage assumption) that not everyone wants. The right shape is almost certainly a **backend the owner selects**, not something Roamcam decides for them — someone who wants zero third parties picks Meshtastic or their own ChirpStack gateway; someone who wants guaranteed national coverage and is fine with an account picks TTN or a local telco. The uplink payload (a tiny incident/position packet) is small and generic enough that swapping the backend shouldn't mean rewriting the feature — just where the packet goes.
+
+Next real step is still hands-on and backend-independent: identify the exact LoRa chip and confirm whether the SPI bus is exposed, before any code gets written.
 
 ## The clock
 
