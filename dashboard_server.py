@@ -305,10 +305,17 @@ def recorder_running():
 
 
 # ---- Live preview (handmatig, standaard UIT — kost dan 0% CPU) ----
+# De opname-ffmpeg schrijft al gratis een rollend venster ruwe H.264 naar /tmp (tmpfs).
+# Zolang je meekijkt draait er ÉÉN ffmpeg dat die stukjes doorlopend decodeert en er een
+# MJPEG-stroom van maakt. Eerder werd er per frame een nieuwe ffmpeg gestart -- dat kostte
+# ~0,5 s opstarttijd per beeld en gaf dus zo'n 0,5 fps: onbruikbaar om de camera mee te richten.
 LIVE_TAIL_PATTERN = "/tmp/rc_live_%d.h264"
 LIVE_TAIL_GLOB = "/tmp/rc_live_*.h264"
 LIVE_PREVIEW_JPG = "/tmp/rc_live_preview.jpg"
-live_state = {"enabled": False}
+LIVE_W, LIVE_H, LIVE_FPS = 640, 360, 10
+live_state = {"enabled": False, "frame": None, "viewers": 0, "fed": 0, "frames": 0}
+live_proc = None
+live_lock = threading.Lock()
 
 
 def live_pick_source():
@@ -316,24 +323,132 @@ def live_pick_source():
     if len(files) < 2:
         return None
     files.sort(key=os.path.getmtime)
-    return files[-2]  # niet de nieuwste (kan nog beschreven worden), wel de meest recente afgeronde
+    return files[-2]  # niet de nieuwste (wordt nog beschreven), wel de meest recente afgeronde
 
 
-def live_preview_loop():
+def live_stream_start():
+    global live_proc
+    with live_lock:
+        if live_proc is not None and live_proc.poll() is None:
+            return
+        live_state["frame"] = None
+        live_state["fed"] = live_state["frames"] = 0
+        # Bewust SOFTWARE-decode. De hardware-decoder (h264_v4l2m2m) loopt vast op een
+        # doorlopende pijp -- gemeten: 55 KB uitvoer tegen 1,9 MB bij software over dezelfde
+        # invoer. Hij is gemaakt voor losse bestanden, niet voor een continue stroom.
+        # Software kost hier ~0,3 core (57% -> 87% van 400% gemeten), dat is het waard.
+        live_proc = subprocess.Popen(
+            ["ffmpeg", "-loglevel", "error", "-probesize", "32k", "-analyzeduration", "0",
+             "-f", "h264", "-i", "pipe:0",
+             "-an", "-vf", "scale=%d:%d" % (LIVE_W, LIVE_H), "-r", str(LIVE_FPS),
+             "-c:v", "mjpeg", "-q:v", "8", "-flush_packets", "1", "-f", "image2pipe", "pipe:1"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=open("/mnt/data/rec_live.log", "w"), bufsize=0)
+    threading.Thread(target=live_feed_loop, args=(live_proc,), daemon=True).start()
+    threading.Thread(target=live_read_loop, args=(live_proc,), daemon=True).start()
+
+
+def live_stream_stop():
+    global live_proc
+    with live_lock:
+        p, live_proc = live_proc, None
+    if p is not None:
+        for fn in (p.stdin.close, p.terminate):
+            try:
+                fn()
+            except Exception:
+                pass
+    live_state["frame"] = None
+
+
+def _write_all(fh, data):
+    # stdin staat ongebufferd (bufsize=0): write() is dan een RAUWE schrijfactie die maar een
+    # deel kan wegschrijven. Zonder deze lus kreeg ffmpeg maar een fractie van de data binnen
+    # en kwam er nooit beeld uit.
+    off = 0
+    while off < len(data):
+        n = fh.write(data[off:])
+        if not n:
+            return False
+        off += n
+    fh.flush()
+    return True
+
+
+def live_feed_loop(proc):
+    # Volgt het bestand dat op dit moment beschreven wordt en voert alleen de nieuw bijgekomen
+    # bytes aan de decoder -- zoals 'tail -f'. Per heel afgerond bestand voeren gaf schokken van
+    # een seconde en dus een hakkelend beeld; zo loopt het gelijkmatig en is de vertraging klein.
+    cur, off = None, 0
+    while proc.poll() is None and live_state["enabled"]:
+        try:
+            files = glob.glob(LIVE_TAIL_GLOB)
+            if files:
+                newest = max(files, key=os.path.getmtime)
+                size = os.path.getsize(newest)
+                if newest != cur or size < off:
+                    cur, off = newest, 0  # nieuw bestand, of hergebruikt door de wrap
+                if size > off:
+                    with open(newest, "rb") as f:
+                        f.seek(off)
+                        data = f.read(size - off)
+                    off = size
+                    if not _write_all(proc.stdin, data):
+                        break
+                    live_state["fed"] += 1
+        except Exception:
+            break
+        time.sleep(0.15)
+    try:
+        proc.stdin.close()
+    except Exception:
+        pass
+
+
+def live_read_loop(proc):
+    # Splitst de aaneengesloten JPEG's op hun startmarkering (FFD8FF). Op de EOI splitsen zou
+    # kunnen falen als die bytecombinatie toevallig in de beelddata zit.
+    buf = b""
+    SOI = b"\xff\xd8\xff"
+    while proc.poll() is None:
+        try:
+            chunk = proc.stdout.read(16384)
+            if not chunk:
+                break
+            buf += chunk
+            while True:
+                start = buf.find(SOI)
+                if start < 0:
+                    break
+                nxt = buf.find(SOI, start + 3)
+                if nxt < 0:
+                    if start > 0:
+                        buf = buf[start:]
+                    break
+                live_state["frame"] = buf[start:nxt]
+                live_state["frames"] += 1
+                buf = buf[nxt:]
+            if len(buf) > 2000000:  # vangnet: nooit onbeperkt laten groeien
+                buf = b""
+        except Exception:
+            break
+
+
+def live_supervisor():
+    # Start/stopt de stream op basis van de knop, en ruimt op zodra de opname stopt.
     while True:
         try:
-            if live_state["enabled"] and recorder_running():
-                src = live_pick_source()
-                if src:
-                    subprocess.run(
-                        ["ffmpeg", "-y", "-c:v", "h264_v4l2m2m", "-i", src,
-                         "-frames:v", "1", "-s", "480x270", "-f", "image2", LIVE_PREVIEW_JPG],
-                        capture_output=True, timeout=4)
-                time.sleep(2)
-            else:
-                time.sleep(1)
+            want = live_state["enabled"] and recorder_running()
+            alive = live_proc is not None and live_proc.poll() is None
+            if want and not alive:
+                live_stream_start()
+            elif not want and alive:
+                live_stream_stop()
+            if not recorder_running():
+                live_state["enabled"] = False
         except Exception:
-            time.sleep(2)
+            pass
+        time.sleep(1)
 
 
 def suppress_hivemapper():
@@ -354,6 +469,7 @@ def stop_vid():
     sh("kill $(ps aux 2>/dev/null | grep -E 'libcamera-vid|ffmpeg' | grep -v grep | awk '{print $1}') 2>/dev/null")
     rec_state["proc"] = None
     live_state["enabled"] = False
+    live_stream_stop()  # de brede ffmpeg-kill hierboven pakt 'm ook, maar dan blijft de state hangen
     for f in glob.glob(LIVE_TAIL_GLOB) + [LIVE_PREVIEW_JPG]:
         try:
             os.remove(f)
@@ -1970,27 +2086,55 @@ class H(BaseHTTPRequestHandler):
         if p == "/live/status":
             return self._send(200, "application/json", json.dumps({
                 "enabled": live_state["enabled"], "running": recorder_running(),
-                "hasFrame": os.path.exists(LIVE_PREVIEW_JPG)}))
+                "hasFrame": live_state["frame"] is not None,
+                "viewers": live_state["viewers"], "frames": live_state["frames"],
+                "fed": live_state["fed"],
+                "w": LIVE_W, "h": LIVE_H, "fps": LIVE_FPS}))
+        if p == "/live.mjpg":
+            if not live_state["enabled"]:
+                return self._send(404, "text/plain", "preview off")
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=rcframe")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                live_state["viewers"] += 1
+                last = None
+                idle = 0.0
+                tick = 1.0 / (LIVE_FPS * 4)  # ruim sneller kijken dan de beeldsnelheid,
+                while live_state["enabled"]:  # anders mis je beelden en oogt het schokkerig
+                    f = live_state["frame"]
+                    if f is not None and f is not last:
+                        last, idle = f, 0.0
+                        self.wfile.write(b"--rcframe\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                                         + str(len(f)).encode() + b"\r\n\r\n" + f + b"\r\n")
+                        self.wfile.flush()
+                    else:
+                        idle += tick
+                        if idle > 20:  # decoder levert niets meer -- verbinding netjes sluiten
+                            break
+                    time.sleep(tick)
+            except Exception:
+                pass  # kijker weggeklikt / verbinding verbroken: normaal, geen fout
+            finally:
+                live_state["viewers"] = max(0, live_state["viewers"] - 1)
+            return
         if p == "/live/toggle":
             q = parse_qs(urlparse(self.path).query)
             want_on = q.get("on", ["0"])[0] == "1"
             if want_on and not recorder_running():
                 return self._send(200, "application/json", json.dumps({"ok": False, "enabled": False}))
             live_state["enabled"] = want_on
-            if not want_on:
-                try:
-                    os.remove(LIVE_PREVIEW_JPG)
-                except Exception:
-                    pass
+            if want_on:
+                live_stream_start()
+            else:
+                live_stream_stop()
             return self._send(200, "application/json", json.dumps({"ok": True, "enabled": live_state["enabled"]}))
         if p == "/live_preview.jpg":
-            if not live_state["enabled"]:
+            # los stilstaand beeld -- blijft bestaan voor wie geen MJPEG-stream aankan
+            if not live_state["enabled"] or live_state["frame"] is None:
                 return self._send(404, "text/plain", "preview off")
-            try:
-                with open(LIVE_PREVIEW_JPG, "rb") as f:
-                    return self._send(200, "image/jpeg", f.read())
-            except Exception:
-                return self._send(404, "text/plain", "no frame yet")
+            return self._send(200, "image/jpeg", live_state["frame"])
         if p == "/rec/hivemapper":
             restore_hivemapper()
             return self._send(200, "application/json", json.dumps({"ok": True, "standalone": rec_cfg.get("standalone")}))
@@ -2780,7 +2924,9 @@ function updateLiveToggleUI(){const b=$('liveToggle');
   b.textContent=tt(PREVIEW_ON?'previewOn':'previewOff',PREVIEW_ON?'Live preview: aan':'Live preview: uit');
   b.className='ledbtn'+(PREVIEW_ON?' on':'');}
 async function setPreview(on){if(on&&!RECORDER_RUNNING)return;PREVIEW_ON=on;updateLiveToggleUI();
-  try{await fetch('/live/toggle?on='+(on?1:0));}catch(e){}}
+  if(!on){const img=$('frame');if(img.src.includes('/live.mjpg'))img.removeAttribute('src');}
+  try{await fetch('/live/toggle?on='+(on?1:0));}catch(e){}
+  if(on)setTimeout(tickFrame,300);}  // even wachten tot de decoder z'n eerste beeld heeft
 $('liveToggle').onclick=()=>setPreview(!PREVIEW_ON);
 // bij elke paginalaad staat preview server-side altijd uit; forceer dat ook lokaal (nooit "aan blijven staan")
 setPreview(false);
@@ -2791,9 +2937,13 @@ async function tickFrame(){
     $('liveToggle').style.display='';$('liveNote').style.display='';
     if(PREVIEW_ON){
       ov.style.display='none';
-      img.src='/live_preview.jpg?t='+Date.now();
+      // Doorlopende MJPEG-stream: de browser houdt één verbinding open en krijgt de beelden
+      // vanzelf binnen. Alleen bij het aanzetten zetten, NIET elke tick -- anders wordt de
+      // stream telkens opnieuw opgebouwd en zie je juist weer haperingen.
+      if(!img.src.includes('/live.mjpg'))img.src='/live.mjpg?t='+Date.now();
     } else {
       ov.style.display='flex';ov.textContent='';
+      if(img.src.includes('/live.mjpg'))img.removeAttribute('src');  // verbinding loslaten
     }
   } else if(RECORDER_STANDALONE){
     $('liveToggle').style.display='none';$('liveNote').style.display='none';
@@ -3236,7 +3386,7 @@ if __name__ == "__main__":
     threading.Thread(target=incident_loop, daemon=True).start()
     threading.Thread(target=trip_loop, daemon=True).start()
     threading.Thread(target=zero_to_100_loop, daemon=True).start()
-    threading.Thread(target=live_preview_loop, daemon=True).start()
+    threading.Thread(target=live_supervisor, daemon=True).start()
     threading.Thread(target=track_loop, daemon=True).start()
     threading.Thread(target=srt_loop, daemon=True).start()
     threading.Thread(target=gps_time_sync, daemon=True).start()
