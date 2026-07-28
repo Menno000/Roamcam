@@ -1372,6 +1372,14 @@ def save_wifi_settings():
 
 
 def _wifi_ap_up():
+    # Interface eerst hard resetten -- na een STA-poging staat wlan0 nog in client-modus,
+    # en de brcmfmac-firmware op dit toestel wisselt niet betrouwbaar zonder een down/up.
+    sh("pkill -f roamcam_wpa.conf 2>/dev/null; pkill udhcpc 2>/dev/null; pkill wpa_supplicant 2>/dev/null")
+    sh("ip addr flush dev wlan0 2>/dev/null")
+    sh("ip link set wlan0 down 2>/dev/null")
+    time.sleep(1)
+    sh("ip link set wlan0 up 2>/dev/null")
+    time.sleep(1)
     sh("systemctl start hostapd 2>/dev/null")
     wifi_state["mode"] = "ap"
     wifi_state["home_ip"] = ""
@@ -1407,8 +1415,20 @@ def wifi_try_home_once():
             wifi_state["last_error"] = "kon niet verbinden (SSID niet in bereik of verkeerd wachtwoord)"
             raise RuntimeError("sta join failed")
         sh("rm -f /tmp/roamcam_sta.ip")
-        sh("udhcpc -i wlan0 -n -q -s /bin/true 2>/mnt/data/wifi_dhcp.log && "
-           "ip -4 -o addr show wlan0 | awk '{print $4}' | cut -d/ -f1 > /tmp/roamcam_sta.ip")
+        # -s /bin/true deed NIETS -- dat script is juist verantwoordelijk voor het echt
+        # toepassen van het IP op de interface. udhcpc kreeg keurig een lease van de router
+        # (vandaar zichtbaar in de Deco-app), maar wlan0 zelf kreeg 'm nooit. Fix: een echt
+        # bind-script dat "ip addr add ... dev wlan0" uitvoert op het "bound"-event.
+        bind_script = "/tmp/roamcam_udhcpc_bind.sh"
+        with open(bind_script, "w") as f:
+            f.write("#!/bin/sh\n"
+                    "[ \"$1\" = bound -o \"$1\" = renew ] || exit 0\n"
+                    "ip addr flush dev wlan0\n"
+                    "ip addr add $ip/${mask:-24} dev wlan0\n"
+                    "[ -n \"$router\" ] && ip route replace default via $router dev wlan0\n")
+        sh("chmod +x %s" % bind_script)
+        sh("udhcpc -i wlan0 -n -q -s %s 2>/mnt/data/wifi_dhcp.log && "
+           "ip -4 -o addr show wlan0 | awk '{print $4}' | cut -d/ -f1 > /tmp/roamcam_sta.ip" % bind_script)
         time.sleep(1)
         ip = _wifi_home_ip()
         if not ip:
@@ -1645,6 +1665,7 @@ class H(BaseHTTPRequestHandler):
             out["home_ssid"] = wifi_cfg.get("home_ssid", "")
             out["ap_ssid"] = read("/mnt/data/wifi.cfg").split(",")[0] if os.path.exists("/mnt/data/wifi.cfg") else ""
             out["dash_pw_set"] = bool(security_cfg.get("dash_pw_hash"))
+            out["current_ip"] = sh("hostname -I").split()[0] if sh("hostname -I") else ""
             return self._send(200, "application/json", json.dumps(out))
         if p == "/wifi/set":
             q = parse_qs(urlparse(self.path).query)
@@ -2518,7 +2539,7 @@ setInterval(()=>{if(document.querySelector('.tabbtn[data-tab="settings"]').class
 let WIFI_LOADED_ONCE=false;
 async function loadWifi(){try{const d=await jget('/wifi/status');
   const home=d.mode==='home';
-  $('wifiStatus').textContent=home?(tt('wifiOnHome','op thuisnetwerk')+' · '+d.home_ip):(tt('wifiOnAp','op eigen AP')+(d.last_error?' — '+d.last_error:''));
+  $('wifiStatus').textContent=(home?tt('wifiOnHome','op thuisnetwerk'):tt('wifiOnAp','op eigen AP'))+' · IP '+(d.current_ip||'–')+(!home&&d.last_error?' — '+d.last_error:'');
   $('wifiPill').textContent=home?tt('wifiOnHome','thuis'):tt('wifiOnAp','AP');
   $('wifiPill').className='pill '+(home?'g':'b');
   if(!WIFI_LOADED_ONCE){$('wifiHomeSsid').value=d.home_ssid||'';WIFI_LOADED_ONCE=true;}
