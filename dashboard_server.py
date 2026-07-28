@@ -2,8 +2,14 @@
 # Hivemapper HDC - lokaal "alles-in-1" dashboard
 # Draait op het toestel zelf, serveert de pagina + proxy naar de lokale API (:5000) + systeeminfo.
 import json, os, socket, subprocess, urllib.request, glob, math, sqlite3, time, threading, calendar, re
+import struct, fcntl, ctypes
 from urllib.parse import urlparse, parse_qs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+try:
+    import gpiod
+except Exception:
+    gpiod = None
 
 API = "http://127.0.0.1:5000"
 PORT = 8080
@@ -695,6 +701,13 @@ def led_color_for(fn):
     if fn == "beweging":
         pk = _led_cache["imu"].get("peak_g", 1) if _led_cache["imu"].get("ok") else 1
         return LED_COLORS["rood"] if abs(pk - 1) > 0.3 else LED_COLORS["uit"]
+    if fn == "lora":
+        st = lora_state.get("status")
+        if st == "joined":
+            return LED_COLORS["groen"]
+        if st == "searching":
+            return LED_COLORS["geel"]
+        return LED_COLORS["uit"]
     if fn == "temp":
         try:
             t = int(read("/sys/class/thermal/thermal_zone0/temp", "0")) / 1000.0
@@ -767,6 +780,560 @@ def latest_frame():
     if body[:2] == b"\xff\xd8":
         return body
     return None
+
+
+# ---- LoRa / TTN (optioneel, uit tenzij de eigenaar het instelt) ----
+# Puur stdlib: eigen AES-128 + AES-CMAC (LoRaWAN 1.0.3 OTAA), rechtstreeks over
+# spidev + gpiod naar de SX1262 op de camera. Geen extra packages nodig.
+LORA_DEFAULT = {"backend": "off", "deveui": "", "appkey": "", "joineui": "0000000000000000"}
+lora_cfg = dict(LORA_DEFAULT)
+lora_state = {"status": "off", "backend": "off", "devaddr": None, "attempts": 0, "uplinks": 0,
+              "last_join_attempt": 0, "last_uplink": 0, "last_error": ""}
+
+# ---- Meshtastic backend (optional second choice) ----
+# Needs meshtasticd + its .so dependencies manually staged under MESHTASTICD_DIR --
+# not bundled with Roamcam itself (large binary, see docs). Gracefully reports
+# "not installed" if it's missing, rather than erroring.
+MESHTASTICD_DIR = "/mnt/data/meshtasticd"
+MESHTASTICD_BIN = MESHTASTICD_DIR + "/meshtasticd"
+MESHTASTICD_LIB = MESHTASTICD_DIR + "/lib"
+MESHTASTICD_CONFIG = MESHTASTICD_DIR + "/config.yaml"
+MESHTASTICD_FSDIR = MESHTASTICD_DIR + "/data"
+meshtasticd_proc = None
+
+
+def meshtasticd_installed():
+    return os.path.isfile(MESHTASTICD_BIN) and os.path.isdir(MESHTASTICD_LIB) and os.path.isfile(MESHTASTICD_CONFIG)
+
+
+def _meshtasticd_hwid():
+    # stabiele, unieke identiteit per toestel: afgeleid van de eigen wifi-MAC
+    for ifc in ("wlan0", "eth0"):
+        mac = read("/sys/class/net/%s/address" % ifc)
+        if mac and mac != "00:00:00:00:00:00":
+            return mac
+    return "02:00:00:00:00:01"
+
+
+def meshtasticd_start():
+    global meshtasticd_proc
+    if meshtasticd_proc is not None and meshtasticd_proc.poll() is None:
+        return
+    os.makedirs(MESHTASTICD_FSDIR, exist_ok=True)
+    env = dict(os.environ)
+    env["LD_LIBRARY_PATH"] = MESHTASTICD_LIB
+    log_path = MESHTASTICD_DIR + "/run.log"
+    logf = open(log_path, "w")  # vers logje per start, anders leest de statuscheck oude regels
+    meshtasticd_proc = subprocess.Popen(
+        [MESHTASTICD_BIN, "--config", MESHTASTICD_CONFIG, "--fsdir", MESHTASTICD_FSDIR,
+         "--port", "4403", "--hwid", _meshtasticd_hwid()],
+        env=env, stdout=logf, stderr=subprocess.STDOUT)
+
+
+def meshtasticd_stop():
+    global meshtasticd_proc
+    if meshtasticd_proc is not None:
+        try:
+            meshtasticd_proc.terminate()
+            meshtasticd_proc.wait(timeout=5)
+        except Exception:
+            try:
+                meshtasticd_proc.kill()
+            except Exception:
+                pass
+        meshtasticd_proc = None
+
+
+def meshtasticd_check_log():
+    # geen protobuf-API-client hier -- we lezen simpelweg de laatste regels van het eigen logje
+    try:
+        with open(MESHTASTICD_DIR + "/run.log", "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - 4000))
+            tail = f.read().decode(errors="ignore")
+        if "sx1262 init success" in tail or "API server listen" in tail:
+            return "joined"
+        if "Failed" in tail or "error" in tail.lower():
+            return "searching"
+    except Exception:
+        pass
+    return "searching"
+
+_LORA_SBOX = [
+0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5,0x30,0x01,0x67,0x2b,0xfe,0xd7,0xab,0x76,
+0xca,0x82,0xc9,0x7d,0xfa,0x59,0x47,0xf0,0xad,0xd4,0xa2,0xaf,0x9c,0xa4,0x72,0xc0,
+0xb7,0xfd,0x93,0x26,0x36,0x3f,0xf7,0xcc,0x34,0xa5,0xe5,0xf1,0x71,0xd8,0x31,0x15,
+0x04,0xc7,0x23,0xc3,0x18,0x96,0x05,0x9a,0x07,0x12,0x80,0xe2,0xeb,0x27,0xb2,0x75,
+0x09,0x83,0x2c,0x1a,0x1b,0x6e,0x5a,0xa0,0x52,0x3b,0xd6,0xb3,0x29,0xe3,0x2f,0x84,
+0x53,0xd1,0x00,0xed,0x20,0xfc,0xb1,0x5b,0x6a,0xcb,0xbe,0x39,0x4a,0x4c,0x58,0xcf,
+0xd0,0xef,0xaa,0xfb,0x43,0x4d,0x33,0x85,0x45,0xf9,0x02,0x7f,0x50,0x3c,0x9f,0xa8,
+0x51,0xa3,0x40,0x8f,0x92,0x9d,0x38,0xf5,0xbc,0xb6,0xda,0x21,0x10,0xff,0xf3,0xd2,
+0xcd,0x0c,0x13,0xec,0x5f,0x97,0x44,0x17,0xc4,0xa7,0x7e,0x3d,0x64,0x5d,0x19,0x73,
+0x60,0x81,0x4f,0xdc,0x22,0x2a,0x90,0x88,0x46,0xee,0xb8,0x14,0xde,0x5e,0x0b,0xdb,
+0xe0,0x32,0x3a,0x0a,0x49,0x06,0x24,0x5c,0xc2,0xd3,0xac,0x62,0x91,0x95,0xe4,0x79,
+0xe7,0xc8,0x37,0x6d,0x8d,0xd5,0x4e,0xa9,0x6c,0x56,0xf4,0xea,0x65,0x7a,0xae,0x08,
+0xba,0x78,0x25,0x2e,0x1c,0xa6,0xb4,0xc6,0xe8,0xdd,0x74,0x1f,0x4b,0xbd,0x8b,0x8a,
+0x70,0x3e,0xb5,0x66,0x48,0x03,0xf6,0x0e,0x61,0x35,0x57,0xb9,0x86,0xc1,0x1d,0x9e,
+0xe1,0xf8,0x98,0x11,0x69,0xd9,0x8e,0x94,0x9b,0x1e,0x87,0xe9,0xce,0x55,0x28,0xdf,
+0x8c,0xa1,0x89,0x0d,0xbf,0xe6,0x42,0x68,0x41,0x99,0x2d,0x0f,0xb0,0x54,0xbb,0x16]
+_LORA_RCON = [0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80,0x1b,0x36]
+
+
+def _lora_xtime(a):
+    a <<= 1
+    if a & 0x100:
+        a ^= 0x11b
+    return a & 0xff
+
+
+def _lora_key_expansion(key):
+    Nk = 4
+    w = [list(key[4*i:4*i+4]) for i in range(Nk)]
+    for i in range(Nk, 44):
+        temp = list(w[i - 1])
+        if i % Nk == 0:
+            temp = temp[1:] + temp[:1]
+            temp = [_LORA_SBOX[b] for b in temp]
+            temp[0] ^= _LORA_RCON[i // Nk - 1]
+        w.append([w[i - Nk][j] ^ temp[j] for j in range(4)])
+    return w
+
+
+def lora_aes128_encrypt_block(key, block16):
+    w = _lora_key_expansion(key)
+    state = [[block16[r + 4 * c] for c in range(4)] for r in range(4)]
+
+    def add_round_key(state, rk):
+        for c in range(4):
+            for r in range(4):
+                state[r][c] ^= rk[c][r]
+
+    def sub_bytes(state):
+        for r in range(4):
+            for c in range(4):
+                state[r][c] = _LORA_SBOX[state[r][c]]
+
+    def shift_rows(state):
+        for r in range(1, 4):
+            state[r] = state[r][r:] + state[r][:r]
+
+    def mix_columns(state):
+        for c in range(4):
+            a = [state[r][c] for r in range(4)]
+            state[0][c] = _lora_xtime(a[0]) ^ (_lora_xtime(a[1]) ^ a[1]) ^ a[2] ^ a[3]
+            state[1][c] = a[0] ^ _lora_xtime(a[1]) ^ (_lora_xtime(a[2]) ^ a[2]) ^ a[3]
+            state[2][c] = a[0] ^ a[1] ^ _lora_xtime(a[2]) ^ (_lora_xtime(a[3]) ^ a[3])
+            state[3][c] = (_lora_xtime(a[0]) ^ a[0]) ^ a[1] ^ a[2] ^ _lora_xtime(a[3])
+
+    add_round_key(state, w[0:4])
+    for rnd in range(1, 10):
+        sub_bytes(state); shift_rows(state); mix_columns(state)
+        add_round_key(state, w[4*rnd:4*rnd+4])
+    sub_bytes(state); shift_rows(state)
+    add_round_key(state, w[40:44])
+
+    out = bytearray(16)
+    for c in range(4):
+        for r in range(4):
+            out[r + 4*c] = state[r][c]
+    return bytes(out)
+
+
+def _lora_shift_left_1(b):
+    n = int.from_bytes(b, "big") << 1
+    n &= (1 << (8 * len(b))) - 1
+    return n.to_bytes(len(b), "big")
+
+
+def lora_aes_cmac(key, msg):
+    const_Rb = 0x87
+    L = lora_aes128_encrypt_block(key, b"\x00" * 16)
+    K1 = _lora_shift_left_1(L)
+    if L[0] & 0x80:
+        K1 = (int.from_bytes(K1, "big") ^ const_Rb).to_bytes(16, "big")
+    K2 = _lora_shift_left_1(K1)
+    if K1[0] & 0x80:
+        K2 = (int.from_bytes(K2, "big") ^ const_Rb).to_bytes(16, "big")
+    if len(msg) == 0 or len(msg) % 16 != 0:
+        padded = msg + b"\x80" + b"\x00" * (15 - (len(msg) % 16))
+        M_last = bytes(a ^ b for a, b in zip(padded, K2))
+    else:
+        M_last = bytes(a ^ b for a, b in zip(msg[-16:], K1))
+    blocks = [msg[i:i+16] for i in range(0, len(msg) - 16, 16)] if len(msg) > 16 else []
+    x = b"\x00" * 16
+    for b in blocks:
+        x = lora_aes128_encrypt_block(key, bytes(a ^ c for a, c in zip(x, b)))
+    x = lora_aes128_encrypt_block(key, bytes(a ^ c for a, c in zip(x, M_last)))
+    return x
+
+
+# SX1262 raw driver -- exact pins the stock lorawan-logger uses (/opt/dashcam/cfg/lorawan.conf)
+LORA_GPIOCHIP = "gpiochip0"
+LORA_CS_OFFSET, LORA_BUSY_OFFSET, LORA_NRST_OFFSET, LORA_DIO1_OFFSET = 18, 25, 24, 7
+LORA_SPI_DEV = "/dev/spidev1.0"
+_LORA_SPI_IOC_MAGIC = ord('k')
+
+
+def _lora_IOC(direction, type_, nr, size):
+    return (direction << 30) | (type_ << 8) | (nr << 0) | (size << 16)
+
+
+def _lora_SPI_IOC_MESSAGE(n):
+    return _lora_IOC(1, _LORA_SPI_IOC_MAGIC, 0, n * 32)
+
+
+_LORA_SPI_IOC_WR_MODE = _lora_IOC(1, _LORA_SPI_IOC_MAGIC, 1, 1)
+_LORA_SPI_IOC_WR_BITS = _lora_IOC(1, _LORA_SPI_IOC_MAGIC, 3, 1)
+_LORA_SPI_IOC_WR_SPEED = _lora_IOC(1, _LORA_SPI_IOC_MAGIC, 4, 4)
+
+LORA_IRQ_TX_DONE = 1 << 0
+LORA_IRQ_RX_DONE = 1 << 1
+LORA_IRQ_TIMEOUT = 1 << 9
+LORA_JOIN_FREQ, LORA_JOIN_SF = 868100000, 7
+LORA_RX2_FREQ, LORA_RX2_SF = 869525000, 9
+
+
+class LoraRadio:
+    def __init__(self):
+        self.chip = gpiod.Chip(LORA_GPIOCHIP)
+        self.cs = self.chip.get_line(LORA_CS_OFFSET)
+        self.cs.request(consumer="roamcam_lora", type=gpiod.LINE_REQ_DIR_OUT, default_vals=[1])
+        self.busy = self.chip.get_line(LORA_BUSY_OFFSET)
+        self.busy.request(consumer="roamcam_lora", type=gpiod.LINE_REQ_DIR_IN)
+        self.nrst = self.chip.get_line(LORA_NRST_OFFSET)
+        self.nrst.request(consumer="roamcam_lora", type=gpiod.LINE_REQ_DIR_OUT, default_vals=[1])
+        self.fd = open(LORA_SPI_DEV, "r+b", buffering=0)
+        fcntl.ioctl(self.fd, _LORA_SPI_IOC_WR_MODE, struct.pack("B", 0))
+        fcntl.ioctl(self.fd, _LORA_SPI_IOC_WR_BITS, struct.pack("B", 8))
+        fcntl.ioctl(self.fd, _LORA_SPI_IOC_WR_SPEED, struct.pack("<I", 2000000))
+
+    def _xfer(self, tx_bytes):
+        n = len(tx_bytes)
+        tx_buf = ctypes.create_string_buffer(bytes(tx_bytes), n)
+        rx_buf = ctypes.create_string_buffer(n)
+        packed = struct.pack("<QQIIHBBI", ctypes.addressof(tx_buf), ctypes.addressof(rx_buf),
+                              n, 0, 0, 8, 0, 0)
+        fcntl.ioctl(self.fd, _lora_SPI_IOC_MESSAGE(1), packed)
+        return bytes(rx_buf.raw)
+
+    def _wait_not_busy(self, timeout=1.0):
+        t0 = time.time()
+        while self.busy.get_value() == 1:
+            if time.time() - t0 > timeout:
+                raise TimeoutError("SX1262 BUSY stuck high")
+            time.sleep(0.0005)
+
+    def cmd(self, opcode, params=b"", read_len=0):
+        self._wait_not_busy()
+        self.cs.set_value(0)
+        tx = bytes([opcode]) + bytes(params) + bytes(read_len)
+        rx = self._xfer(tx)
+        self.cs.set_value(1)
+        return rx[1 + len(params):]
+
+    def reset(self):
+        self.nrst.set_value(0); time.sleep(0.001); self.nrst.set_value(1)
+        self._wait_not_busy(timeout=1.0)
+
+    def set_standby_rc(self): self.cmd(0x80, [0x00])
+    def set_packet_type_lora(self): self.cmd(0x8A, [0x01])
+
+    def set_rf_frequency(self, freq_hz):
+        freq_reg = int(freq_hz * (1 << 25) / 32000000)
+        self.cmd(0x86, list(struct.pack(">I", freq_reg)))
+
+    def set_buffer_base_address(self, tx=0, rx=0): self.cmd(0x8F, [tx, rx])
+
+    def set_modulation_params_lora(self, sf=7, bw=0x04, cr=1, ldro=0):
+        self.cmd(0x8B, [sf, bw, cr, ldro])
+
+    def set_packet_params_lora(self, preamble_len=8, header_type=0, payload_len=0, crc_on=1, invert_iq=0):
+        b = struct.pack(">H", preamble_len) + bytes([header_type, payload_len, crc_on, invert_iq])
+        self.cmd(0x8C, list(b))
+
+    def set_tx_params(self, power_dbm=14, ramp=0x04): self.cmd(0x8E, [power_dbm & 0xFF, ramp])
+
+    def set_dio_irq_params(self, irq_mask, dio1_mask):
+        self.cmd(0x08, list(struct.pack(">HHHH", irq_mask, dio1_mask, 0, 0)))
+
+    def clear_irq_status(self, mask=0xFFFF): self.cmd(0x02, list(struct.pack(">H", mask)))
+
+    def get_irq_status(self):
+        r = self.cmd(0x12, [0x00], read_len=2)
+        return struct.unpack(">H", r[:2])[0]
+
+    def write_buffer(self, offset, data): self.cmd(0x0E, [offset] + list(data))
+
+    def read_buffer(self, offset, length):
+        return self.cmd(0x1E, [offset, 0x00], read_len=length)
+
+    def set_tx(self, timeout_ms=4000):
+        t = int(timeout_ms * 1000 / 15.625)
+        self.cmd(0x83, list(struct.pack(">I", t)[1:4]))
+
+    def set_rx(self, timeout_ms):
+        t = int(timeout_ms * 1000 / 15.625) if timeout_ms else 0xFFFFFF
+        self.cmd(0x82, list(struct.pack(">I", t)[1:4]))
+
+    def get_rx_buffer_status(self):
+        r = self.cmd(0x13, [0x00], read_len=2)
+        return r[0], r[1]
+
+    def close(self):
+        self.fd.close()
+        self.cs.release(); self.busy.release(); self.nrst.release()
+
+
+def _lora_configure(radio, freq_hz, sf, power=14):
+    radio.set_standby_rc()
+    radio.set_packet_type_lora()
+    radio.set_rf_frequency(freq_hz)
+    radio.set_buffer_base_address(0, 0)
+    radio.set_modulation_params_lora(sf=sf, bw=0x04, cr=1, ldro=0)
+    radio.set_tx_params(power_dbm=power, ramp=0x04)
+
+
+def _lora_tx(radio, freq_hz, sf, payload):
+    _lora_configure(radio, freq_hz, sf)
+    radio.set_packet_params_lora(preamble_len=8, header_type=0, payload_len=len(payload), crc_on=1, invert_iq=0)
+    radio.write_buffer(0, payload)
+    radio.clear_irq_status(0xFFFF)
+    radio.set_dio_irq_params(LORA_IRQ_TX_DONE | LORA_IRQ_TIMEOUT, LORA_IRQ_TX_DONE | LORA_IRQ_TIMEOUT)
+    t0 = time.time()
+    radio.set_tx(timeout_ms=4000)
+    while True:
+        irq = radio.get_irq_status()
+        if irq & LORA_IRQ_TX_DONE:
+            radio.clear_irq_status(0xFFFF)
+            return time.time()
+        if irq & LORA_IRQ_TIMEOUT or time.time() - t0 > 4.0:
+            radio.clear_irq_status(0xFFFF)
+            raise TimeoutError("LoRa TX timed out")
+        time.sleep(0.005)
+
+
+def _lora_rx_window(radio, freq_hz, sf, window_s, invert_iq=1):
+    radio.set_standby_rc()
+    radio.set_packet_type_lora()
+    radio.set_rf_frequency(freq_hz)
+    radio.set_buffer_base_address(0, 0)
+    radio.set_modulation_params_lora(sf=sf, bw=0x04, cr=1, ldro=0)
+    radio.set_packet_params_lora(preamble_len=8, header_type=0, payload_len=255, crc_on=0, invert_iq=invert_iq)
+    radio.clear_irq_status(0xFFFF)
+    radio.set_dio_irq_params(LORA_IRQ_RX_DONE | LORA_IRQ_TIMEOUT, LORA_IRQ_RX_DONE | LORA_IRQ_TIMEOUT)
+    radio.set_rx(timeout_ms=int(window_s * 1000))
+    t0 = time.time()
+    while time.time() - t0 < window_s + 0.5:
+        irq = radio.get_irq_status()
+        if irq & LORA_IRQ_RX_DONE:
+            plen, start = radio.get_rx_buffer_status()
+            data = radio.read_buffer(start, plen)
+            radio.clear_irq_status(0xFFFF)
+            return data
+        if irq & LORA_IRQ_TIMEOUT:
+            radio.clear_irq_status(0xFFFF)
+            return None
+        time.sleep(0.01)
+    return None
+
+
+def _lora_build_join_request(appkey, joineui, deveui, devnonce):
+    payload = bytes([0x00]) + joineui[::-1] + deveui[::-1] + struct.pack("<H", devnonce)
+    return payload + lora_aes_cmac(appkey, payload)[:4]
+
+
+def _lora_parse_join_accept(appkey, raw, devnonce):
+    if raw is None or len(raw) < 12 or raw[0] != 0x20:
+        return None
+    pt = b""
+    encrypted = raw[1:]
+    for i in range(0, len(encrypted), 16):
+        block = encrypted[i:i+16]
+        if len(block) < 16:
+            break
+        pt += lora_aes128_encrypt_block(appkey, block)
+    body = raw[0:1] + pt
+    if len(body) < 12:
+        return None
+    ok = lora_aes_cmac(appkey, body[:-4])[:4] == body[-4:]
+    return {"ok": ok, "appnonce": body[1:4], "netid": body[4:7], "devaddr": body[7:11]}
+
+
+def _lora_derive_session_keys(appkey, appnonce, netid, devnonce):
+    pad = appnonce + netid + struct.pack("<H", devnonce) + b"\x00" * 7
+    return (lora_aes128_encrypt_block(appkey, b"\x01" + pad),
+            lora_aes128_encrypt_block(appkey, b"\x02" + pad))
+
+
+def _lora_encrypt_payload(key, devaddr, fcnt, payload):
+    out = bytearray()
+    i = 1
+    for off in range(0, len(payload), 16):
+        a = bytes([0x01, 0, 0, 0, 0, 0]) + devaddr[::-1] + struct.pack("<I", fcnt) + bytes([0x00, i])
+        s = lora_aes128_encrypt_block(key, a)
+        out += bytes(p ^ k for p, k in zip(payload[off:off+16], s))
+        i += 1
+    return bytes(out)
+
+
+def _lora_build_uplink(nwkskey, appskey, devaddr, fcnt, fport, payload):
+    mhdr = bytes([0x40])
+    fhdr = devaddr[::-1] + bytes([0x00]) + struct.pack("<H", fcnt)
+    enc = _lora_encrypt_payload(appskey, devaddr, fcnt, payload)
+    msg = mhdr + fhdr + bytes([fport]) + enc
+    b0 = bytes([0x49, 0, 0, 0, 0, 0]) + devaddr[::-1] + struct.pack("<I", fcnt) + bytes([0x00, len(msg)])
+    return msg + lora_aes_cmac(nwkskey, b0 + msg)[:4]
+
+
+def load_lora_settings():
+    try:
+        d = json.load(open(LED_SETTINGS_PATH))
+        if isinstance(d.get("lora"), dict):
+            for k in LORA_DEFAULT:
+                if k in d["lora"]:
+                    lora_cfg[k] = d["lora"][k]
+    except Exception:
+        pass
+
+
+def save_lora_settings():
+    try:
+        d = {}
+        try:
+            d = json.load(open(LED_SETTINGS_PATH))
+        except Exception:
+            pass
+        d["lora"] = dict(lora_cfg)
+        with open(LED_SETTINGS_PATH, "w") as f:
+            json.dump(d, f)
+    except Exception:
+        pass
+
+
+def lora_loop():
+    # Eén achtergrondlus die schakelt tussen backends (uit / TTN / Meshtastic).
+    # De radio heeft maar één eigenaar tegelijk, dus lorawan-logger gaat uit zodra
+    # een backend actief wordt, en komt terug zodra alles weer op "uit" staat.
+    radio = None
+    session = None
+    fcnt = 0
+    current_backend = "off"
+    next_join_attempt = 0.0
+    next_uplink = 0.0
+    while True:
+        try:
+            wanted = lora_cfg.get("backend", "off")
+            if wanted == "ttn" and not (lora_cfg.get("deveui") and lora_cfg.get("appkey")):
+                wanted = "off"  # TTN gekozen maar nog niet geconfigureerd
+            if wanted == "meshtastic" and not meshtasticd_installed():
+                wanted = "off"  # meshtasticd niet (handmatig) geïnstalleerd
+            if gpiod is None:
+                wanted = "off"
+
+            if wanted != current_backend:
+                # backend wisselt: alles van de vorige backend netjes opruimen
+                if current_backend == "ttn" and radio is not None:
+                    try:
+                        radio.close()
+                    except Exception:
+                        pass
+                    radio = None
+                    session = None
+                if current_backend == "meshtastic":
+                    meshtasticd_stop()
+                if wanted == "off":
+                    sh("systemctl start lorawan-logger 2>/dev/null")
+                    lora_state["status"] = "off"
+                else:
+                    sh("systemctl stop lorawan-logger 2>/dev/null")
+                    time.sleep(2)
+                    lora_state["status"] = "searching"
+                lora_state["backend"] = wanted
+                lora_state["last_error"] = ""
+                lora_state["devaddr"] = None
+                next_join_attempt = 0.0
+                next_uplink = 0.0
+                current_backend = wanted
+
+            if current_backend == "off":
+                time.sleep(2)
+                continue
+
+            if current_backend == "meshtastic":
+                if meshtasticd_proc is None or meshtasticd_proc.poll() is not None:
+                    meshtasticd_start()
+                lora_state["status"] = meshtasticd_check_log()
+                time.sleep(3)
+                continue
+
+            # --- TTN backend ---
+            if radio is None:
+                radio = LoraRadio()
+
+            if session is None:
+                if time.time() < next_join_attempt:
+                    time.sleep(1)
+                    continue
+                next_join_attempt = time.time() + 60
+                lora_state["attempts"] += 1
+                lora_state["last_join_attempt"] = time.time()
+                try:
+                    deveui = bytes.fromhex(lora_cfg["deveui"])
+                    appkey = bytes.fromhex(lora_cfg["appkey"])
+                    joineui = bytes.fromhex(lora_cfg.get("joineui") or "0000000000000000")
+                    devnonce = struct.unpack("<H", os.urandom(2))[0]
+                    radio.reset()
+                    jreq = _lora_build_join_request(appkey, joineui, deveui, devnonce)
+                    tx_done_t = _lora_tx(radio, LORA_JOIN_FREQ, LORA_JOIN_SF, jreq)
+                    sleep_for = (tx_done_t + 5.0) - time.time()
+                    if sleep_for > 0:
+                        time.sleep(sleep_for)
+                    raw = _lora_rx_window(radio, LORA_JOIN_FREQ, LORA_JOIN_SF, window_s=1.5)
+                    if raw is None:
+                        sleep_for = (tx_done_t + 6.0) - time.time()
+                        if sleep_for > 0:
+                            time.sleep(sleep_for)
+                        raw = _lora_rx_window(radio, LORA_RX2_FREQ, LORA_RX2_SF, window_s=2.0)
+                    result = _lora_parse_join_accept(appkey, raw, devnonce)
+                    if result and result["ok"]:
+                        nwkskey, appskey = _lora_derive_session_keys(appkey, result["appnonce"], result["netid"], devnonce)
+                        session = {"devaddr": result["devaddr"], "nwkskey": nwkskey, "appskey": appskey}
+                        fcnt = 0
+                        lora_state["status"] = "joined"
+                        lora_state["devaddr"] = result["devaddr"].hex()
+                        next_uplink = 0.0
+                    else:
+                        lora_state["status"] = "searching"
+                except Exception as e:
+                    lora_state["last_error"] = str(e)
+                continue
+
+            # sessie actief: periodiek een klein positiebakentje sturen
+            if time.time() < next_uplink:
+                time.sleep(1)
+                continue
+            next_uplink = time.time() + 300
+            try:
+                lat, lon = 0.0, 0.0
+                try:
+                    st, ct, body = proxy("/api/1/gps/sample")
+                    if st == 200:
+                        g = json.loads(body)
+                        lat, lon = float(g.get("lat", 0) or 0), float(g.get("lng", g.get("lon", 0)) or 0)
+                except Exception:
+                    pass
+                payload = struct.pack(">ff", lat, lon)
+                frame = _lora_build_uplink(session["nwkskey"], session["appskey"], session["devaddr"], fcnt, 1, payload)
+                _lora_tx(radio, LORA_JOIN_FREQ, LORA_JOIN_SF, frame)
+                fcnt += 1
+                lora_state["uplinks"] += 1
+                lora_state["last_uplink"] = time.time()
+            except Exception as e:
+                lora_state["last_error"] = str(e)
+        except Exception as e:
+            lora_state["last_error"] = str(e)
+            time.sleep(5)
 
 
 class H(BaseHTTPRequestHandler):
@@ -874,6 +1441,28 @@ class H(BaseHTTPRequestHandler):
                 ui_cfg["units"] = q["units"][0]
             save_ui_settings()
             return self._send(200, "application/json", json.dumps(ui_cfg))
+        if p == "/lora/status":
+            out = dict(lora_state)
+            out["backend_wanted"] = lora_cfg.get("backend", "off")
+            out["configured"] = bool(lora_cfg.get("deveui") and lora_cfg.get("appkey"))
+            out["deveui"] = lora_cfg.get("deveui", "")
+            out["available"] = gpiod is not None
+            out["meshtastic_installed"] = meshtasticd_installed()
+            return self._send(200, "application/json", json.dumps(out))
+        if p == "/lora/set":
+            q = parse_qs(urlparse(self.path).query)
+            if "backend" in q and q["backend"][0] in ("off", "ttn", "meshtastic"):
+                lora_cfg["backend"] = q["backend"][0]
+            if "deveui" in q:
+                v = re.sub(r"[^0-9a-fA-F]", "", q["deveui"][0])
+                if len(v) == 16:
+                    lora_cfg["deveui"] = v.lower()
+            if "appkey" in q:
+                v = re.sub(r"[^0-9a-fA-F]", "", q["appkey"][0])
+                if len(v) == 32:
+                    lora_cfg["appkey"] = v.lower()
+            save_lora_settings()
+            return self._send(200, "application/json", json.dumps({"ok": True}))
         if p == "/rec/status":
             files = glob.glob(CLIPS_DIR + "/*.mp4")
             return self._send(200, "application/json", json.dumps({
@@ -1265,6 +1854,31 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
     <div class="muted" style="font-size:11px;margin-top:8px" data-t="ledNote">Bij "zelf instellen" stuurt het dashboard de LEDs aan (blijft stabiel, ook na een API-herstart). GPS-fix / beweging / temp / snelheid updaten live mee.</div>
   </div></div>
 
+  <div class="card" data-tab="settings"><h2><span data-t="cLora">LoRa (experimenteel)</span> <span id="loraPill" class="pill b">–</span></h2><div class="body">
+    <div class="ledrow"><label data-t="loraBackend">Netwerk</label><select class="ledsel" id="loraBackend">
+      <option value="off" data-t="off">Uit</option>
+      <option value="ttn">The Things Network</option>
+      <option value="meshtastic">Meshtastic</option>
+    </select></div>
+    <div id="loraTtnFields">
+      <div class="kv" style="margin-top:8px">
+        <div class="k">DevEUI</div><div class="v"><input class="mono" id="loraDevEui" placeholder="70b3d57ed00788c9" style="width:100%;background:transparent;color:inherit;border:1px solid var(--bd);border-radius:6px;padding:4px 6px;font-size:12px"></div>
+        <div class="k">AppKey</div><div class="v"><input class="mono" id="loraAppKey" placeholder="32 hex tekens" style="width:100%;background:transparent;color:inherit;border:1px solid var(--bd);border-radius:6px;padding:4px 6px;font-size:12px"></div>
+      </div>
+      <div class="muted" style="font-size:11px;margin-top:8px" data-t="loraNote">Stuurt een klein GPS-positiebakentje via The Things Network (LoRaWAN OTAA). Vereist een gratis account op console.cloud.thethings.network. DevEUI/AppKey haal je daar op.</div>
+    </div>
+    <div id="loraMeshFields" style="display:none">
+      <div class="muted" style="font-size:11px;margin-top:8px" data-t="loraMeshNote">Draait meshtasticd op deze camera als een mesh-node. Verbind de gratis Meshtastic-app (Android/iOS) via "TCP" met dit toestel op poort 4403. Vereist dat meshtasticd handmatig op het toestel is geïnstalleerd — zie docs/HOWTO.md.</div>
+      <div class="err-line" id="loraMeshMissing" style="display:none;margin-top:6px" data-t="loraMeshMissing">meshtasticd niet gevonden op dit toestel — nog niet (handmatig) geïnstalleerd.</div>
+    </div>
+    <div class="kv" style="margin-top:8px">
+      <div class="k" data-t="status">Status</div><div class="v" id="loraStatus">–</div>
+      <div class="k" data-t="loraLastUplink">Laatste bericht</div><div class="v" id="loraLastUplink">–</div>
+    </div>
+    <button class="ledbtn" id="loraSave" style="margin-top:10px" data-t="loraSaveBtn">Opslaan</button>
+    <div class="muted" style="font-size:11px;margin-top:8px" data-t="loraGenNote">Experimenteel. Pauzeert de stock LoRa/Helium-service zolang een van beide aan staat — komt vanzelf terug zodra je "Uit" kiest.</div>
+  </div></div>
+
   <div class="card" data-tab="live"><h2>GPS / GNSS <span id="fixPill" class="pill b">–</span></h2><div class="body">
     <div class="kv">
       <div class="k">Latitude</div><div class="v mono" id="lat">–</div>
@@ -1381,7 +1995,13 @@ const I18N={nl:{},en:{
  previewOff:'Live preview: off',previewOn:'Live preview: on',
  previewNote:'Manual on/off — only uses CPU while watching.',
  previewLoading:'Starting preview…',previewCamOff:'Camera is off — nothing to preview',
- previewStock:'Hivemapper is active — this shows its own captured frames'
+ previewStock:'Hivemapper is active — this shows its own captured frames',
+ cLora:'LoRa (experimental)',loraBackend:'Network',loraSaveBtn:'Save',ago:'ago',
+ loraLastUplink:'Last message',
+ loraNote:'Sends a small GPS position beacon over The Things Network (LoRaWAN OTAA). Needs a free account at console.cloud.thethings.network — get the DevEUI/AppKey there.',
+ loraMeshNote:'Runs meshtasticd on this camera as a mesh node. Connect the free Meshtastic app (Android/iOS) via "TCP" to this device on port 4403. Needs meshtasticd manually installed on the device first — see docs/HOWTO.md.',
+ loraMeshMissing:'meshtasticd not found on this device — not (manually) installed yet.',
+ loraGenNote:'Experimental. Pauses the stock LoRa/Helium service while either of these is on — comes back automatically once you pick "Off".'
 }};
 let LANG='nl',UNITS='kmh';
 const T=k=>(LANG==='en'&&I18N.en[k])?I18N.en[k]:null;
@@ -1588,8 +2208,8 @@ async function tickImu(){
 }
 
 // ---- LED-bediening ----
-const LED_NL=[['uit','Uit'],['opname','Opname (ademend rood)'],['gps','GPS-fix (groen=3D)'],['beweging','Beweging / schok'],['temp','CPU-temp'],['snelheid','Snelheid'],['rood','Vaste kleur: rood'],['groen','Vaste kleur: groen'],['blauw','Vaste kleur: blauw'],['geel','Vaste kleur: geel'],['wit','Vaste kleur: wit'],['paars','Vaste kleur: paars']];
-const LED_EN=[['uit','Off'],['opname','Recording (breathing red)'],['gps','GPS fix (green=3D)'],['beweging','Motion / shock'],['temp','CPU temp'],['snelheid','Speed'],['rood','Fixed colour: red'],['groen','Fixed colour: green'],['blauw','Fixed colour: blue'],['geel','Fixed colour: yellow'],['wit','Fixed colour: white'],['paars','Fixed colour: purple']];
+const LED_NL=[['uit','Uit'],['opname','Opname (ademend rood)'],['gps','GPS-fix (groen=3D)'],['beweging','Beweging / schok'],['temp','CPU-temp'],['snelheid','Snelheid'],['lora','LoRa-status (groen=verbonden)'],['rood','Vaste kleur: rood'],['groen','Vaste kleur: groen'],['blauw','Vaste kleur: blauw'],['geel','Vaste kleur: geel'],['wit','Vaste kleur: wit'],['paars','Vaste kleur: paars']];
+const LED_EN=[['uit','Off'],['opname','Recording (breathing red)'],['gps','GPS fix (green=3D)'],['beweging','Motion / shock'],['temp','CPU temp'],['snelheid','Speed'],['lora','LoRa status (green=joined)'],['rood','Fixed colour: red'],['groen','Fixed colour: green'],['blauw','Fixed colour: blue'],['geel','Fixed colour: yellow'],['wit','Fixed colour: white'],['paars','Fixed colour: purple']];
 const LED_FNS=LED_NL;
 const LED_SW={uit:'#222',opname:'#ff4d4d',rood:'#ff4d4d',groen:'#3fb950',blauw:'#4dabf7',geel:'#f5d90a',wit:'#eee',paars:'#b197fc',gps:'#3fb950',beweging:'#ff4d4d',temp:'#f5d90a',snelheid:'#4dabf7'};
 function fillLedSelects(){
@@ -1613,7 +2233,7 @@ function showTab(tab){const leavingLive=(document.querySelector('.tabbtn.on')?.d
   document.querySelectorAll('.tabbtn').forEach(b=>b.classList.toggle('on',b.dataset.tab===tab));
   if(leavingLive&&PREVIEW_ON)setPreview(false);
   if(tab==='terug'){loadClips();}
-  if(tab==='settings'){loadRec();loadLedState();}}
+  if(tab==='settings'){loadRec();loadLedState();loadLora();}}
 document.querySelectorAll('.tabbtn').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 
 // ---- Recorder ----
@@ -1634,6 +2254,34 @@ $('recHive').onclick=async()=>{if(!confirm(tt('confirmHive','Hivemapper-camera h
 $('recSeg').onchange=()=>fetch('/rec/set?seg='+$('recSeg').value);
 $('recCap').onchange=()=>fetch('/rec/set?cap_gb='+$('recCap').value);
 $('recG').onchange=()=>fetch('/rec/set?gforce='+$('recG').value);
+
+// ---- LoRa (TTN / Meshtastic, experimenteel) ----
+const LORA_STATUS_LABEL={off:['uit','off'],searching:['zoekt verbinding…','searching…'],joined:['verbonden','joined']};
+function fmtAgo(ts){if(!ts)return'–';const s=Math.max(0,Math.floor(Date.now()/1000-ts));if(s<60)return s+'s';if(s<3600)return Math.floor(s/60)+'m';return Math.floor(s/3600)+'u'}
+function loraShowFields(){const b=$('loraBackend').value;
+  $('loraTtnFields').style.display=b==='ttn'?'':'none';
+  $('loraMeshFields').style.display=b==='meshtastic'?'':'none';}
+$('loraBackend').onchange=loraShowFields;
+let LORA_LOADED_ONCE=false;
+async function loadLora(){try{const d=await jget('/lora/status');
+  const st=d.status||'off';const lbl=LORA_STATUS_LABEL[st]||[st,st];
+  $('loraStatus').textContent=LANG==='en'?lbl[1]:lbl[0];
+  $('loraPill').textContent=$('loraStatus').textContent;
+  $('loraPill').className='pill '+(st==='joined'?'g':(st==='searching'?'y':'b'));
+  $('loraLastUplink').textContent=d.last_uplink?(fmtAgo(d.last_uplink)+' '+tt('ago','geleden')+(d.devaddr?'  ·  '+d.devaddr:'')):'–';
+  $('loraMeshMissing').style.display=(d.backend_wanted==='meshtastic'&&!d.meshtastic_installed)?'block':'none';
+  if(!LORA_LOADED_ONCE){$('loraBackend').value=d.backend_wanted||'off';$('loraDevEui').value=d.deveui||'';loraShowFields();LORA_LOADED_ONCE=true;}
+}catch(e){}}
+$('loraSave').onclick=async()=>{
+  const params=new URLSearchParams();
+  params.set('backend',$('loraBackend').value);
+  if($('loraDevEui').value.trim())params.set('deveui',$('loraDevEui').value.trim());
+  if($('loraAppKey').value.trim())params.set('appkey',$('loraAppKey').value.trim());
+  await fetch('/lora/set?'+params.toString());
+  $('loraAppKey').value='';
+  setTimeout(loadLora,500);
+};
+setInterval(()=>{if(document.querySelector('.tabbtn[data-tab="settings"]').classList.contains('on'))loadLora();},4000);
 
 // ---- Voorkeuren (taal + eenheden) ----
 async function loadPrefs(){try{const d=await jget('/ui/get');LANG=d.lang||'en';UNITS=d.units||'kmh';
@@ -1715,6 +2363,7 @@ if __name__ == "__main__":
     load_led_settings()
     load_rec_settings()
     load_ui_settings()
+    load_lora_settings()
     threading.Thread(target=led_driver, daemon=True).start()
     threading.Thread(target=retention_loop, daemon=True).start()
     threading.Thread(target=incident_loop, daemon=True).start()
@@ -1722,6 +2371,7 @@ if __name__ == "__main__":
     threading.Thread(target=track_loop, daemon=True).start()
     threading.Thread(target=srt_loop, daemon=True).start()
     threading.Thread(target=gps_time_sync, daemon=True).start()
+    threading.Thread(target=lora_loop, daemon=True).start()
     # standalone-modus + recorder hervatten na reboot
     if rec_cfg.get("standalone"):
         try:
