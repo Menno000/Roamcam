@@ -819,6 +819,11 @@ def meshtasticd_start():
     global meshtasticd_proc
     if meshtasticd_proc is not None and meshtasticd_proc.poll() is None:
         return
+    # Als het dashboard herstart (crash/kill) zonder dat zijn vorige meshtasticd-kind
+    # netjes meeging, blijft die wees de GPIO-pinnen vasthouden en faalt de nieuwe start.
+    # killall is idempotent -- geen probleem als er toch niks draait.
+    sh("killall meshtasticd 2>/dev/null")
+    time.sleep(1)
     os.makedirs(MESHTASTICD_FSDIR, exist_ok=True)
     env = dict(os.environ)
     env["LD_LIBRARY_PATH"] = MESHTASTICD_LIB
@@ -859,6 +864,57 @@ def meshtasticd_check_log():
     except Exception:
         pass
     return "searching"
+
+
+# Minimal, dependency-free encoder for meshtasticd's local client TCP API (port 4403),
+# just enough to send a text message -- no pip package, matches this project's
+# stdlib-only design. Field numbers/wire types verified against meshtastic/protobufs.
+def _mesh_pb_varint(n):
+    out = bytearray()
+    while True:
+        b = n & 0x7F
+        n >>= 7
+        if n:
+            out.append(b | 0x80)
+        else:
+            out.append(b)
+            break
+    return bytes(out)
+
+
+def _mesh_pb_tag(field_num, wire_type):
+    return _mesh_pb_varint((field_num << 3) | wire_type)
+
+
+def _mesh_pb_varint_field(field_num, value):
+    return _mesh_pb_tag(field_num, 0) + _mesh_pb_varint(value)
+
+
+def _mesh_pb_fixed32_field(field_num, value):
+    return _mesh_pb_tag(field_num, 5) + struct.pack("<I", value)
+
+
+def _mesh_pb_bytes_field(field_num, data):
+    return _mesh_pb_tag(field_num, 2) + _mesh_pb_varint(len(data)) + data
+
+
+def meshtastic_send_text(text, channel=0):
+    data_msg = _mesh_pb_varint_field(1, 1) + _mesh_pb_bytes_field(2, text.encode("utf-8"))  # portnum=TEXT_MESSAGE_APP
+    pkt_id = int.from_bytes(os.urandom(4), "little") or 1
+    mesh_packet = (
+        _mesh_pb_fixed32_field(2, 0xFFFFFFFF)  # to = broadcast
+        + _mesh_pb_varint_field(3, channel)
+        + _mesh_pb_bytes_field(4, data_msg)  # decoded
+        + _mesh_pb_fixed32_field(6, pkt_id)  # id
+    )
+    to_radio = _mesh_pb_bytes_field(1, mesh_packet)  # ToRadio.packet
+    header = bytes([0x94, 0xC3, (len(to_radio) >> 8) & 0xFF, len(to_radio) & 0xFF])
+    s = socket.create_connection(("127.0.0.1", 4403), timeout=5)
+    try:
+        s.sendall(header + to_radio)
+    finally:
+        s.close()
+
 
 _LORA_SBOX = [
 0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5,0x30,0x01,0x67,0x2b,0xfe,0xd7,0xab,0x76,
@@ -1646,6 +1702,17 @@ class H(BaseHTTPRequestHandler):
             out["available"] = gpiod is not None
             out["meshtastic_installed"] = meshtasticd_installed()
             return self._send(200, "application/json", json.dumps(out))
+        if p == "/lora/mesh_test":
+            if lora_cfg.get("backend") != "meshtastic" or meshtasticd_proc is None:
+                return self._send(200, "application/json", json.dumps({"ok": False, "error": "meshtastic backend niet actief"}))
+            try:
+                meshtastic_send_text("Roamcam test " + time.strftime("%H:%M:%S"))
+                lora_state["uplinks"] = lora_state.get("uplinks", 0) + 1
+                lora_state["last_uplink"] = time.time()
+                return self._send(200, "application/json", json.dumps({"ok": True}))
+            except Exception as e:
+                lora_state["last_error"] = str(e)
+                return self._send(200, "application/json", json.dumps({"ok": False, "error": str(e)}))
         if p == "/lora/set":
             q = parse_qs(urlparse(self.path).query)
             if "backend" in q and q["backend"][0] in ("off", "ttn", "meshtastic"):
@@ -2096,10 +2163,13 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
     <div id="loraMeshFields" style="display:none">
       <div class="muted" style="font-size:11px;margin-top:8px" data-t="loraMeshNote">Draait meshtasticd op deze camera als een mesh-node. Verbind de gratis Meshtastic-app (Android/iOS) via "TCP" met dit toestel op poort 4403. Vereist dat meshtasticd handmatig op het toestel is geïnstalleerd — zie docs/HOWTO.md.</div>
       <div class="err-line" id="loraMeshMissing" style="display:none;margin-top:6px" data-t="loraMeshMissing">meshtasticd niet gevonden op dit toestel — nog niet (handmatig) geïnstalleerd.</div>
+      <button class="ledbtn" id="loraMeshTest" style="margin-top:8px" data-t="loraMeshTestBtn">Stuur testbericht nu</button>
     </div>
     <div class="kv" style="margin-top:8px">
       <div class="k" data-t="status">Status</div><div class="v" id="loraStatus">–</div>
       <div class="k" data-t="loraLastUplink">Laatste bericht</div><div class="v" id="loraLastUplink">–</div>
+      <div class="k" data-t="loraAttempts">Pogingen</div><div class="v" id="loraAttempts">–</div>
+      <div class="k" data-t="loraLastError">Laatste fout</div><div class="v" id="loraLastError">–</div>
     </div>
     <button class="ledbtn" id="loraSave" style="margin-top:10px" data-t="loraSaveBtn">Opslaan</button>
     <div class="muted" style="font-size:11px;margin-top:8px" data-t="loraGenNote">Experimenteel. Pauzeert de stock LoRa/Helium-service zolang een van beide aan staat — komt vanzelf terug zodra je "Uit" kiest.</div>
@@ -2245,6 +2315,7 @@ const I18N={nl:{},en:{
  previewLoading:'Starting preview…',previewCamOff:'Camera is off — nothing to preview',
  previewStock:'Hivemapper is active — this shows its own captured frames',
  cLora:'LoRa (experimental)',loraBackend:'Network',loraSaveBtn:'Save',ago:'ago',
+ loraMeshTestBtn:'Send test message now',loraAttempts:'Attempts',loraLastError:'Last error',
  loraLastUplink:'Last message',
  loraNote:'Sends a small GPS position beacon over The Things Network (LoRaWAN OTAA). Needs a free account at console.cloud.thethings.network — get the DevEUI/AppKey there.',
  loraMeshNote:'Runs meshtasticd on this camera as a mesh node. Connect the free Meshtastic app (Android/iOS) via "TCP" to this device on port 4403. Needs meshtasticd manually installed on the device first — see docs/HOWTO.md.',
@@ -2523,6 +2594,8 @@ async function loadLora(){try{const d=await jget('/lora/status');
   $('loraPill').textContent=$('loraStatus').textContent;
   $('loraPill').className='pill '+(st==='joined'?'g':(st==='searching'?'y':'b'));
   $('loraLastUplink').textContent=d.last_uplink?(fmtAgo(d.last_uplink)+' '+tt('ago','geleden')+(d.devaddr?'  ·  '+d.devaddr:'')):'–';
+  $('loraAttempts').textContent=(d.attempts||0)+(d.uplinks?' ('+d.uplinks+' verzonden)':'');
+  $('loraLastError').textContent=d.last_error||'–';
   $('loraMeshMissing').style.display=(d.backend_wanted==='meshtastic'&&!d.meshtastic_installed)?'block':'none';
   if(!LORA_LOADED_ONCE){$('loraBackend').value=d.backend_wanted||'off';$('loraDevEui').value=d.deveui||'';loraShowFields();LORA_LOADED_ONCE=true;}
 }catch(e){}}
@@ -2534,6 +2607,11 @@ $('loraSave').onclick=async()=>{
   await fetch('/lora/set?'+params.toString());
   $('loraAppKey').value='';
   setTimeout(loadLora,500);
+};
+$('loraMeshTest').onclick=async()=>{
+  $('loraMeshTest').disabled=true;
+  try{await fetch('/lora/mesh_test');}catch(e){}
+  setTimeout(()=>{$('loraMeshTest').disabled=false;loadLora();},800);
 };
 setInterval(()=>{if(document.querySelector('.tabbtn[data-tab="settings"]').classList.contains('on'))loadLora();},4000);
 
