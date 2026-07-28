@@ -596,8 +596,13 @@ def retention_loop():
                 cutoff = time.time() - keep * 86400
                 for f in glob.glob(TRIPS_DIR + "/*.json"):
                     try:
-                        if os.path.getmtime(f) < cutoff and os.path.basename(f)[:-5] != trip_state.get("id"):
-                            os.remove(f)
+                        tid = os.path.basename(f)[:-5]
+                        if os.path.getmtime(f) < cutoff and tid != trip_state.get("id"):
+                            for path in trip_files(tid):
+                                try:
+                                    os.remove(path)
+                                except Exception:
+                                    pass
                     except Exception:
                         pass
         except Exception:
@@ -705,6 +710,52 @@ def _trip_write(finalized):
         pass
 
 
+def _trip_route_path(trip_id):
+    return os.path.join(TRIPS_DIR, "%s.route.ndjson" % trip_id)
+
+
+def trip_route_append(g, spd_kmh):
+    # Losse, alleen-aanvullende regel per punt in plaats van in de rit-JSON. De stroom valt weg
+    # met het contact, dus een bestand dat alleen maar groeit overleeft dat beter dan een dat
+    # elke keer helemaal herschreven wordt -- en het blijft snel op een lange rit.
+    if not trip_state["id"]:
+        return
+    try:
+        os.makedirs(TRIPS_DIR, exist_ok=True)
+        with open(_trip_route_path(trip_state["id"]), "a") as f:
+            f.write(json.dumps({
+                "t": round(time.time(), 1),
+                "lat": round(g["lat"], 6), "lon": round(g["lon"], 6),
+                "alt": round(g.get("alt") or 0, 1),
+                "spd": round(spd_kmh, 1),
+                "hdg": round(g.get("heading") or 0, 1),
+                "sat": g.get("sats") or 0,
+            }) + "\n")
+    except Exception:
+        pass
+
+
+def trip_route_load(trip_id, max_points=0):
+    pts = []
+    try:
+        with open(_trip_route_path(trip_id)) as f:
+            for ln in f:
+                try:
+                    pts.append(json.loads(ln))
+                except Exception:
+                    pass
+    except Exception:
+        return []
+    if max_points and len(pts) > max_points:  # gelijkmatig uitdunnen, begin/eind behouden
+        step = len(pts) / float(max_points)
+        pts = [pts[min(len(pts) - 1, int(i * step))] for i in range(max_points)]
+    return pts
+
+
+def trip_files(trip_id):
+    return [_trip_path(trip_id), _trip_route_path(trip_id)]
+
+
 def trip_loop():
     while True:
         try:
@@ -724,14 +775,19 @@ def trip_loop():
                 g = gnss_latest()
                 lat, lon = g.get("lat"), g.get("lon")
                 spd = (g.get("speed") or 0) * 3.6
-                if lat and lon:
+                # Zonder geldige fix levert de module gewoon door: oude coordinaten die
+                # rondspringen en daaruit afgeleide fantasiesnelheden. Binnen op tafel gaf dat
+                # een "rit" van 7,8 km. Alles zonder fix telt daarom niet mee.
+                has_fix = g.get("fix") in ("2D", "3D") and lat and lon
+                if has_fix:
                     if trip_state["last_lat"] is not None:
                         d = _haversine_m(trip_state["last_lat"], trip_state["last_lon"], lat, lon)
                         if d < 200:  # sprong (geen/slechte fix) niet meetellen
                             trip_state["distance_m"] += d
                     trip_state["last_lat"], trip_state["last_lon"] = lat, lon
-                if spd > trip_state["max_speed_kmh"]:
-                    trip_state["max_speed_kmh"] = spd
+                    if spd > trip_state["max_speed_kmh"]:
+                        trip_state["max_speed_kmh"] = spd
+                    trip_route_append(g, spd)
                 if time.time() - trip_state["last_flush"] > 10:
                     trip_state["last_flush"] = time.time()
                     _trip_write(finalized=False)
@@ -2271,26 +2327,63 @@ class H(BaseHTTPRequestHandler):
             elif bad and good:
                 out["overlap"] = True
             return self._send(200, "application/json", json.dumps(out))
+        if p == "/trip/route":
+            q = parse_qs(urlparse(self.path).query)
+            tid = q.get("id", [""])[0]
+            if not (tid and re.match(r"^[0-9_]+$", tid)):
+                return self._send(400, "application/json", json.dumps({"ok": False}))
+            pts = trip_route_load(tid, max_points=600)  # genoeg voor een vloeiende lijn
+            return self._send(200, "application/json", json.dumps({"points": pts}))
+        if p == "/trip/gpx":
+            q = parse_qs(urlparse(self.path).query)
+            tid = q.get("id", [""])[0]
+            if not (tid and re.match(r"^[0-9_]+$", tid)):
+                return self._send(400, "text/plain", "bad id")
+            pts = trip_route_load(tid)
+            if not pts:
+                return self._send(404, "text/plain", "no route logged for this trip")
+            head = ('<?xml version="1.0" encoding="UTF-8"?>\n'
+                    '<gpx version="1.1" creator="Roamcam" xmlns="http://www.topografix.com/GPX/1/1">\n'
+                    '<trk><name>Roamcam %s</name><trkseg>\n' % tid)
+            body = []
+            for pt in pts:
+                body.append('<trkpt lat="%.6f" lon="%.6f"><ele>%.1f</ele><time>%s</time></trkpt>\n'
+                            % (pt["lat"], pt["lon"], pt.get("alt", 0),
+                               time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(pt["t"]))))
+            gpx = (head + "".join(body) + "</trkseg></trk></gpx>\n").encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/gpx+xml")
+            self.send_header("Content-Disposition", 'attachment; filename="roamcam_%s.gpx"' % tid)
+            self.send_header("Content-Length", str(len(gpx)))
+            self.end_headers()
+            self.wfile.write(gpx)
+            return
         if p == "/trip_del":
             q = parse_qs(urlparse(self.path).query)
             tid = q.get("id", [""])[0]
             if tid and re.match(r"^[0-9_]+$", tid) and tid != trip_state["id"]:
-                try:
-                    os.remove(_trip_path(tid))
+                ok = False
+                for f in trip_files(tid):
+                    try:
+                        os.remove(f)
+                        ok = True
+                    except Exception:
+                        pass
+                if ok:
                     return self._send(200, "application/json", json.dumps({"ok": True}))
-                except Exception:
-                    pass
             return self._send(400, "application/json", json.dumps({"ok": False}))
         if p == "/trips/delete_all":
             removed = 0
             for f in glob.glob(TRIPS_DIR + "/*.json"):
-                if os.path.basename(f)[:-5] == trip_state["id"]:
+                tid = os.path.basename(f)[:-5]
+                if tid == trip_state["id"]:
                     continue  # de lopende rit nooit weggooien
-                try:
-                    os.remove(f)
-                    removed += 1
-                except Exception:
-                    pass
+                for path in trip_files(tid):
+                    try:
+                        os.remove(path)
+                    except Exception:
+                        pass
+                removed += 1
             return self._send(200, "application/json", json.dumps({"ok": True, "removed": removed}))
         if p == "/trip":
             q = parse_qs(urlparse(self.path).query)
@@ -2815,6 +2908,7 @@ const I18N={nl:{},en:{
  calGap:'They separate cleanly; a stricter setting would drop the wrong ones and keep the correct ones.',
  calMore:'Rate a few more to get a recommendation.',
  powerHealth:'Power',pwOk:'stable',pwDipped:'ok · dipped earlier',pwLow:'undervoltage',
+ routeNone:'no route logged (no GPS fix during this trip)',routePts:'points',routeTop:'max',
  off:'Off',sensHigh:'Sensitive (1.5 g)',sensMed:'Normal (2.0 g)',sensLow:'Low (3.0 g)',
  recNote:'Standalone dashcam mode: records to /mnt/data/clips (1080p30, hardware H.264), oldest clips are deleted past the limit, GPS + motion logged alongside. "Camera off" stops recording but stays standalone. Survives a reboot — in a car it just runs whenever it has power.',
  lockNote:'Incident lock: on an impact or hard stop above the threshold the clip is protected 🔒 and never auto-deleted.',
@@ -3313,8 +3407,40 @@ async function fillTripDetail(id){
     rows+='<div class="k">'+tt('tripClips','Opnames')+'</div><div class="v">'+(clips.length
       ?'<a style="cursor:pointer" onclick="showTripClips('+t.start+','+t.end+')">'+clips.length+' '+tt('clips','clips')+' →</a>'
       :'<span class="muted">–</span>')+'</div>';
-    box.innerHTML=rows+'</div>';
+    box.innerHTML=rows+'</div><div id="tripRoute_'+id+'"></div>';
+    drawTripRoute(id);
   }catch(e){box.innerHTML='<span class="muted">–</span>';}
+}
+async function drawTripRoute(id){
+  const box=$('tripRoute_'+id);if(!box)return;
+  try{
+    const r=await jget('/trip/route?id='+encodeURIComponent(id));
+    const p=r.points||[];
+    if(p.length<2){box.innerHTML='<div class="muted" style="font-size:11px;margin-top:6px">'
+      +tt('routeNone','geen route vastgelegd (geen GPS-fix tijdens deze rit)')+'</div>';return;}
+    const lats=p.map(q=>q.lat),lons=p.map(q=>q.lon);
+    const la0=Math.min(...lats),la1=Math.max(...lats),lo0=Math.min(...lons),lo1=Math.max(...lons);
+    // Op deze schaal volstaat een platte projectie; alleen de lengtegraad-samendrukking
+    // corrigeren, anders staat de route in de lengte of breedte uitgerekt.
+    const k=Math.cos((la0+la1)/2*Math.PI/180);
+    const W=560,H=220,PAD=12;
+    const sx=(lo1-lo0)*k||1e-9, sy=(la1-la0)||1e-9;
+    const sc=Math.min((W-2*PAD)/sx,(H-2*PAD)/sy);
+    const ox=(W-sx*sc)/2, oy=(H-sy*sc)/2;
+    const X=q=>(ox+(q.lon-lo0)*k*sc).toFixed(1);
+    const Y=q=>(oy+(la1-q.lat)*sc).toFixed(1);   // noord boven
+    const d=p.map((q,i)=>(i?'L':'M')+X(q)+' '+Y(q)).join(' ');
+    const top=Math.max(...p.map(q=>q.spd||0));
+    box.innerHTML='<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;max-width:'+W+'px;margin-top:8px;'
+      +'background:var(--card);border:1px solid var(--bd);border-radius:8px" role="img">'
+      +'<path d="'+d+'" fill="none" stroke="var(--acc)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>'
+      +'<circle cx="'+X(p[0])+'" cy="'+Y(p[0])+'" r="5" fill="var(--ok)"/>'
+      +'<circle cx="'+X(p[p.length-1])+'" cy="'+Y(p[p.length-1])+'" r="5" fill="var(--err)"/>'
+      +'</svg>'
+      +'<div class="muted" style="font-size:11px;margin-top:4px">'+p.length+' '+tt('routePts','punten')
+      +' · '+tt('routeTop','hoogste')+' '+Math.round(tspd(top).v)+' '+tspd(top).u
+      +' · <a href="/trip/gpx?id='+encodeURIComponent(id)+'" download>GPX '+tt('download','download')+'</a></div>';
+  }catch(e){box.innerHTML='';}
 }
 function toggleTrip(id){TRIP_OPEN=(TRIP_OPEN===id)?null:id;renderTrips();}
 async function rateMoment(id,t,v){
