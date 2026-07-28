@@ -1668,7 +1668,9 @@ class H(BaseHTTPRequestHandler):
             out["current_ip"] = sh("hostname -I").split()[0] if sh("hostname -I") else ""
             return self._send(200, "application/json", json.dumps(out))
         if p == "/wifi/set":
-            q = parse_qs(urlparse(self.path).query)
+            # keep_blank_values=True -- anders negeert parse_qs lege waardes stilletjes,
+            # en kun je een ingevuld veld nooit meer leegmaken (kostte ons eerder een lockout)
+            q = parse_qs(urlparse(self.path).query, keep_blank_values=True)
             if "home_ssid" in q:
                 wifi_cfg["home_ssid"] = q["home_ssid"][0][:64]
             if "home_psk" in q and q["home_psk"][0]:
