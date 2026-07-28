@@ -115,6 +115,18 @@ No single one of these fits everybody, and picking one for all Roamcam users wou
 
 Next real step is still hands-on and backend-independent: identify the exact LoRa chip and confirm whether the SPI bus is exposed, before any code gets written.
 
+### Home network access (beta branch — being field-tested)
+
+The HDC normally only broadcasts its own isolated `dashcam` Wi-Fi access point — great for "always reachable in the car", annoying when you actually want to log in from the couch or push an update, since your computer has to leave your own network to join it.
+
+The `beta` branch adds an opt-in **home network** setting in the dashboard (Settings tab): enter your home Wi-Fi's SSID/password once, and on every boot the camera tries that network first, falling back to its own `dashcam` AP if it can't join (out of range, wrong password, etc.). The AP's own password is also changeable from the dashboard instead of being fixed.
+
+This is genuinely in progress, not a finished feature — worth being upfront about what that means in practice:
+
+- The Wi-Fi chip on this hardware (Broadcom `brcmfmac`) turned out **not** to support running the AP and a client connection at the same time, despite the driver advertising that it can — confirmed the hard way (`Operation not supported`). So it's a clean switch between modes, never both at once, which matches how the camera is actually used (AP while driving/parked, home network only when you're back and want to log in).
+- Live testing surfaced two real bugs, both now fixed on `beta`: the DHCP client was negotiating a lease but never applying it to the interface (the device looked "connected" from the router's side but was unreachable), and clearing a saved network via the dashboard silently did nothing due to how empty form fields were parsed. Both caused real, if temporary, loss of reachability during testing — not dangerous to the device itself, just inconvenient (a power cycle always recovers it, since it falls back to its own AP if the home network isn't there).
+- Because of that, this is being tested carefully and deliberately rather than left running unattended for now. It'll move to a proper release once it's proven reliable over more cycles.
+
 ## The clock
 
 There's no battery-backed clock in this hardware, and no internet in standalone use — so Roamcam sets the system clock from **GPS**. As soon as there's a fix, timestamps (and clip filenames) are correct, to the second. Nothing to configure.

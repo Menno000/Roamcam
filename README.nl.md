@@ -1,5 +1,7 @@
 # Roamcam
 
+> 🧪 **Je zit op de `beta`-branch.** Zelfde dashboard als `master`, plus experimenten die nog in ontwikkeling zijn (op dit moment: LoRa/TTN/Meshtastic-connectiviteit en thuisnetwerk-toegang) die nog niet af of ingebouwd zijn. Wil je gewoon de stabiele, geteste versie? Gebruik dan [`master`](https://github.com/Menno000/Roamcam/tree/master).
+
 [![License](https://img.shields.io/github/license/Menno000/Roamcam)](LICENSE)
 [![Sponsor](https://img.shields.io/badge/%E2%9D%A4-Sponsor-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Menno000)
 
@@ -144,7 +146,8 @@ Dit is een hobbyproject, gedeeld zoals het is. Een paar eerlijke opmerkingen:
 Haalbaarheid uitgezocht, nog niets gebouwd — lees eerst de uitwerking hieronder voordat je aanneemt dat dit simpel is:
 
 - **Interne updater** — een "check op updates"-knop, loopt tegen aan dat het toestel meestal bewust geen internet heeft; uitwerking in [docs/HOWTO.md](docs/HOWTO.md#toward-a-self-update-mechanism-not-built-yet--the-groundwork) *(Engels)*
-- **LoRa-connectiviteit, netwerk naar keuze** — de HDC heeft een ongebruikte LoRa-radio aan boord; zou een incident-alert of positie-beacon kunnen versturen zonder wifi in de buurt. Meerdere heel verschillende netwerken kunnen dat dragen (je eigen Meshtastic/MeshCore-mesh, gratis netwerken als The Things Network, een zelf-gehoste gateway, of een commerciële telco) — het plan is de gebruiker te laten kiezen, niet één vast in te bakken; volledige vergelijking in [docs/HOWTO.md](docs/HOWTO.md#toward-lora-mesh-networking-not-built-yet--the-groundwork) *(Engels)*
+- **LoRa-connectiviteit, netwerk naar keuze** — de HDC heeft een ongebruikte LoRa-radio aan boord; zou een incident-alert of positie-beacon kunnen versturen zonder wifi in de buurt. Meerdere heel verschillende netwerken kunnen dat dragen (je eigen Meshtastic/MeshCore-mesh, gratis netwerken als The Things Network, een zelf-gehoste gateway, of een commerciële telco) — het plan is de gebruiker te laten kiezen, niet één vast in te bakken; volledige vergelijking in [docs/HOWTO.md](docs/HOWTO.md#toward-lora-mesh-networking-not-built-yet--the-groundwork) *(Engels)*. 🧪 Een TTN/Meshtastic-keuze staat inmiddels in het dashboard (Instellingen-tab) op deze branch, met een bevestigde Meshtastic-verbinding in de praktijk.
+- **Thuisnetwerk-toegang** — een instelling zodat de camera zelf verbinding kan maken met je thuiswifi (naast zijn eigen geïsoleerde AP), voor makkelijker inloggen/updaten, met automatische terugval naar zijn eigen AP als dat niet lukt. 🧪 Gebouwd en wordt getest op deze branch; twee verbindingsbugs die tijdens het testen naar boven kwamen zijn gefixt, maar het is nog niet bewezen betrouwbaar genoeg om als af te beschouwen — zie [docs/HOWTO.md](docs/HOWTO.md#home-network-access-beta-branch--being-field-tested) *(Engels)*.
 
 ### 💭 Ideeën voor later
 
