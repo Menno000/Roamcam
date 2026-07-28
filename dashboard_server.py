@@ -2118,6 +2118,12 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
     <div class="kv">
       <div class="k" data-t="status">Status</div><div class="v" id="recStat">–</div>
       <div class="k">Clips</div><div class="v" id="recClips">–</div>
+      <div class="k" data-t="quality">Kwaliteit</div><div class="v"><select class="ledsel" id="recQuality" style="width:auto">
+        <option value="1920x1080x30">1080p30</option>
+        <option value="1920x1080x60">1080p60</option>
+        <option value="1280x720x30">720p30</option>
+        <option value="1280x720x60">720p60</option>
+      </select></div>
       <div class="k" data-t="segLen">Segmentduur</div><div class="v"><select class="ledsel" id="recSeg" style="width:auto"><option value="30">30 s</option><option value="60">1 min</option><option value="180">3 min</option><option value="300">5 min</option></select></div>
       <div class="k" data-t="storeLimit">Bewaarlimiet</div><div class="v"><select class="ledsel" id="recCap" style="width:auto"><option value="5">5 GB</option><option value="10">10 GB</option><option value="15">15 GB</option><option value="20">20 GB</option></select></div>
       <div class="k" data-t="incLock">Incident-lock</div><div class="v"><select class="ledsel" id="recG" style="width:auto">
@@ -2282,7 +2288,7 @@ const I18N={nl:{},en:{
  imuG:'G-force',imuPeak:'peak',reset:'reset',imuTilt:'Attitude',calm:'calm',moving:'MOTION!',
  cCamera:'Live camera',lastFrame:'Last frame',framesBuf:'Frames buffered',resolution:'Resolution (config)',
  cClips:'Recordings',cRecorder:'Recorder',btnStart:'Start recording',btnCamOff:'Camera off',
- status:'Status',segLen:'Segment length',storeLimit:'Storage limit',incLock:'Incident lock',
+ status:'Status',segLen:'Segment length',storeLimit:'Storage limit',incLock:'Incident lock',quality:'Quality',
  off:'Off',sensHigh:'Sensitive (1.5 g)',sensMed:'Normal (2.0 g)',sensLow:'Low (3.0 g)',
  recNote:'Standalone dashcam mode: records to /mnt/data/clips (1080p30, hardware H.264), oldest clips are deleted past the limit, GPS + motion logged alongside. "Camera off" stops recording but stays standalone. Survives a reboot — in a car it just runs whenever it has power.',
  lockNote:'Incident lock: on an impact or hard stop above the threshold the clip is protected 🔒 and never auto-deleted.',
@@ -2571,7 +2577,7 @@ async function loadRec(){try{const d=await jget('/rec/status');const run=d.runni
   $('recClips').textContent=d.clips+' '+tt('clips','clips')+' · '+fmtBytes(d.bytes)+(d.locked?'  ·  🔒 '+d.locked:'');
   $('recStart').className='ledbtn'+(run?' on':'');$('recStop').className='ledbtn'+(!run&&d.standalone?' on':'');
   if(d.err){$('recErr').style.display='block';$('recErr').textContent='⚠ '+d.err;}else{$('recErr').style.display='none';}
-  if($('recSeg').dataset.init!=='1'){$('recSeg').value=d.seg;$('recCap').value=d.cap_gb;$('recG').value=String(d.gforce??2);$('recSeg').dataset.init='1';}
+  if($('recSeg').dataset.init!=='1'){$('recSeg').value=d.seg;$('recCap').value=d.cap_gb;$('recG').value=String(d.gforce??2);$('recQuality').value=d.w+'x'+d.h+'x'+d.fps;$('recSeg').dataset.init='1';}
 }catch(e){}}
 $('recStart').onclick=async()=>{$('recStat').textContent=tt('freeing','camera vrijmaken…');await fetch('/rec/start');setTimeout(loadRec,8000);};
 $('recStop').onclick=async()=>{$('recStat').textContent=tt('stopping','opname stoppen…');await fetch('/rec/stop');setTimeout(loadRec,2500);};
@@ -2579,6 +2585,15 @@ $('recHive').onclick=async()=>{if(!confirm(tt('confirmHive','Hivemapper-camera h
 $('recSeg').onchange=()=>fetch('/rec/set?seg='+$('recSeg').value);
 $('recCap').onchange=()=>fetch('/rec/set?cap_gb='+$('recCap').value);
 $('recG').onchange=()=>fetch('/rec/set?gforce='+$('recG').value);
+$('recQuality').onchange=async()=>{
+  const[w,h,fps]=$('recQuality').value.split('x');
+  await fetch('/rec/set?w='+w+'&h='+h+'&fps='+fps);
+  if(RECORDER_RUNNING){
+    $('recStat').textContent=tt('freeing','camera vrijmaken…');
+    await fetch('/rec/stop');await new Promise(r=>setTimeout(r,2000));
+    await fetch('/rec/start');setTimeout(loadRec,8000);
+  }
+};
 
 // ---- LoRa (TTN / Meshtastic, experimenteel) ----
 const LORA_STATUS_LABEL={off:['uit','off'],searching:['zoekt verbinding…','searching…'],joined:['verbonden','joined']};
