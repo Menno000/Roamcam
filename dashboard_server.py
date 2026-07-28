@@ -221,7 +221,7 @@ def imu_latest(n=60):
 # ---- Eigen dashcam-recorder ----
 CLIPS_DIR = "/mnt/data/clips"
 REC_DEFAULT = {"on": False, "standalone": False, "seg": 60, "cap_gb": 15, "w": 1920, "h": 1080,
-               "fps": 30, "gain": 0, "shutter": 0, "gforce": 2.0}
+               "fps": 30, "gain": 0, "shutter": 0, "gforce": 2.0, "rotation": 0}
 rec_cfg = dict(REC_DEFAULT)
 rec_state = {"proc": None, "err": "", "started": 0.0}
 UI_DEFAULT = {"lang": "en", "units": "kmh"}  # standaard Engels; NL/mph instelbaar in de UI
@@ -366,6 +366,12 @@ def start_recorder():
         opts += " --gain %d" % rec_cfg["gain"]
     if rec_cfg.get("shutter"):
         opts += " --shutter %d" % rec_cfg["shutter"]
+    if rec_cfg.get("rotation") in (90, 270):
+        # Deze ISP ondersteunt geen 90/270 (vereist een transpose die 'ie niet kan) --
+        # bewust alleen 0/180 aanbieden, die zijn gratis via de hardware zelf.
+        rec_cfg["rotation"] = 0
+    if rec_cfg.get("rotation") == 180:
+        opts += " --rotation 180"
     open("/mnt/data/rec_vid.log", "w").close()
     # Tweede, vrijwel gratis uitgang (pure stream-copy, geen re-encode) die doorlopend een
     # rollend 1s-venster ruwe H.264 in RAM (/tmp = tmpfs) bijhoudt. Kost 0% extra CPU (gemeten).
@@ -1806,10 +1812,13 @@ class H(BaseHTTPRequestHandler):
         if p == "/rec/set":
             q = parse_qs(urlparse(self.path).query)
             for k, cast in (("seg", int), ("cap_gb", int), ("w", int), ("h", int), ("fps", int),
-                            ("gain", int), ("shutter", int), ("gforce", float)):
+                            ("gain", int), ("shutter", int), ("gforce", float), ("rotation", int)):
                 if k in q:
                     try:
-                        rec_cfg[k] = cast(q[k][0])
+                        v = cast(q[k][0])
+                        if k == "rotation" and v not in (0, 180):
+                            continue
+                        rec_cfg[k] = v
                     except Exception:
                         pass
             save_rec_settings()
@@ -2124,6 +2133,10 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
         <option value="1280x720x30">720p30</option>
         <option value="1280x720x60">720p60</option>
       </select></div>
+      <div class="k" data-t="rotation">Rotatie</div><div class="v"><select class="ledsel" id="recRotation" style="width:auto">
+        <option value="0" data-t="rotation0">0° (normaal)</option>
+        <option value="180" data-t="rotation180">180° (ondersteboven)</option>
+      </select></div>
       <div class="k" data-t="segLen">Segmentduur</div><div class="v"><select class="ledsel" id="recSeg" style="width:auto"><option value="30">30 s</option><option value="60">1 min</option><option value="180">3 min</option><option value="300">5 min</option></select></div>
       <div class="k" data-t="storeLimit">Bewaarlimiet</div><div class="v"><select class="ledsel" id="recCap" style="width:auto"><option value="5">5 GB</option><option value="10">10 GB</option><option value="15">15 GB</option><option value="20">20 GB</option></select></div>
       <div class="k" data-t="incLock">Incident-lock</div><div class="v"><select class="ledsel" id="recG" style="width:auto">
@@ -2289,6 +2302,7 @@ const I18N={nl:{},en:{
  cCamera:'Live camera',lastFrame:'Last frame',framesBuf:'Frames buffered',resolution:'Resolution (config)',
  cClips:'Recordings',cRecorder:'Recorder',btnStart:'Start recording',btnCamOff:'Camera off',
  status:'Status',segLen:'Segment length',storeLimit:'Storage limit',incLock:'Incident lock',quality:'Quality',
+ rotation:'Rotation',rotation0:'0° (normal)',rotation180:'180° (upside down)',
  off:'Off',sensHigh:'Sensitive (1.5 g)',sensMed:'Normal (2.0 g)',sensLow:'Low (3.0 g)',
  recNote:'Standalone dashcam mode: records to /mnt/data/clips (1080p30, hardware H.264), oldest clips are deleted past the limit, GPS + motion logged alongside. "Camera off" stops recording but stays standalone. Survives a reboot — in a car it just runs whenever it has power.',
  lockNote:'Incident lock: on an impact or hard stop above the threshold the clip is protected 🔒 and never auto-deleted.',
@@ -2577,7 +2591,7 @@ async function loadRec(){try{const d=await jget('/rec/status');const run=d.runni
   $('recClips').textContent=d.clips+' '+tt('clips','clips')+' · '+fmtBytes(d.bytes)+(d.locked?'  ·  🔒 '+d.locked:'');
   $('recStart').className='ledbtn'+(run?' on':'');$('recStop').className='ledbtn'+(!run&&d.standalone?' on':'');
   if(d.err){$('recErr').style.display='block';$('recErr').textContent='⚠ '+d.err;}else{$('recErr').style.display='none';}
-  if($('recSeg').dataset.init!=='1'){$('recSeg').value=d.seg;$('recCap').value=d.cap_gb;$('recG').value=String(d.gforce??2);$('recQuality').value=d.w+'x'+d.h+'x'+d.fps;$('recSeg').dataset.init='1';}
+  if($('recSeg').dataset.init!=='1'){$('recSeg').value=d.seg;$('recCap').value=d.cap_gb;$('recG').value=String(d.gforce??2);$('recQuality').value=d.w+'x'+d.h+'x'+d.fps;$('recRotation').value=String(d.rotation||0);$('recSeg').dataset.init='1';}
 }catch(e){}}
 $('recStart').onclick=async()=>{$('recStat').textContent=tt('freeing','camera vrijmaken…');await fetch('/rec/start');setTimeout(loadRec,8000);};
 $('recStop').onclick=async()=>{$('recStat').textContent=tt('stopping','opname stoppen…');await fetch('/rec/stop');setTimeout(loadRec,2500);};
@@ -2585,15 +2599,19 @@ $('recHive').onclick=async()=>{if(!confirm(tt('confirmHive','Hivemapper-camera h
 $('recSeg').onchange=()=>fetch('/rec/set?seg='+$('recSeg').value);
 $('recCap').onchange=()=>fetch('/rec/set?cap_gb='+$('recCap').value);
 $('recG').onchange=()=>fetch('/rec/set?gforce='+$('recG').value);
-$('recQuality').onchange=async()=>{
-  const[w,h,fps]=$('recQuality').value.split('x');
-  await fetch('/rec/set?w='+w+'&h='+h+'&fps='+fps);
+async function applyRecChangeAndRestart(qs){
+  await fetch('/rec/set?'+qs);
   if(RECORDER_RUNNING){
     $('recStat').textContent=tt('freeing','camera vrijmaken…');
     await fetch('/rec/stop');await new Promise(r=>setTimeout(r,2000));
     await fetch('/rec/start');setTimeout(loadRec,8000);
   }
+}
+$('recQuality').onchange=()=>{
+  const[w,h,fps]=$('recQuality').value.split('x');
+  applyRecChangeAndRestart('w='+w+'&h='+h+'&fps='+fps);
 };
+$('recRotation').onchange=()=>applyRecChangeAndRestart('rotation='+$('recRotation').value);
 
 // ---- LoRa (TTN / Meshtastic, experimenteel) ----
 const LORA_STATUS_LABEL={off:['uit','off'],searching:['zoekt verbinding…','searching…'],joined:['verbonden','joined']};
