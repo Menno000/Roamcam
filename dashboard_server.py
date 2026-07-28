@@ -221,8 +221,15 @@ def imu_latest(n=60):
 # ---- Eigen dashcam-recorder ----
 CLIPS_DIR = "/mnt/data/clips"
 REC_DEFAULT = {"on": False, "standalone": False, "seg": 60, "cap_gb": 15, "w": 1920, "h": 1080,
-               "fps": 30, "gain": 0, "shutter": 0, "gforce": 2.0, "rotation": 0, "moment_gforce": 1.3,
+               "fps": 30, "gain": 0, "shutter": 0, "gforce": 2.0, "rotation": 0, "moment_sens": "med",
                "trip_keep_days": 90}
+
+# Momentje-markering: geen vaste g-drempel maar een voortschrijdende basislijn van hoeveel
+# de wagen sowieso al trilt, maal een factor. Een vaste drempel bleek onbruikbaar -- op echte
+# rijdata gaf 1.3 g twintig markeringen in zes minuten, puur wegtrilling. (factor, bodem):
+MOMENT_SENS = {"high": (2.5, 0.35), "med": (3.5, 0.45), "low": (4.5, 0.55)}
+MOMENT_ALPHA = 0.02      # trage EWMA op 1 Hz -> ~50 s geheugen; een enkele piek trekt 'm nauwelijks mee
+MOMENT_DEBOUNCE = 10.0
 rec_cfg = dict(REC_DEFAULT)
 rec_state = {"proc": None, "err": "", "started": 0.0}
 UI_DEFAULT = {"lang": "en", "units": "kmh", "hide_short_trips": True}  # standaard Engels; NL/mph instelbaar in de UI
@@ -472,26 +479,41 @@ def incident_loop():
     # G-sensor bewaakt schokken; boven de drempel wordt de lopende clip beschermd
     last_hit = 0.0
     last_moment = 0.0
+    baseline = None
     while True:
         try:
             thr = float(rec_cfg.get("gforce", 0) or 0)
-            mthr = float(rec_cfg.get("moment_gforce", 0) or 0)
-            if (thr > 0 or mthr > 0) and rec_cfg.get("on") and recorder_running():
+            sens = rec_cfg.get("moment_sens", "med")
+            if (thr > 0 or sens in MOMENT_SENS) and rec_cfg.get("on") and recorder_running():
                 d = imu_latest(25)
                 if d.get("ok"):
                     peak = d.get("peak_g", 1.0)
                     now = time.time()
+                    # Incident-lock houdt bewust zijn eigen VASTE drempel -- dit is de
+                    # veiligheidskritische functie, die mag niet meebewegen met de weg.
                     if thr > 0 and abs(peak - 1.0) >= (thr - 1.0) and peak >= thr and now - last_hit > 5:
                         last_hit = now
                         clips = sorted(glob.glob(CLIPS_DIR + "/*.mp4"), key=lambda f: os.path.getmtime(f))
                         for c in clips[-2:]:  # lopende + vorige clip beschermen
                             if not clip_locked(c):
                                 lock_clip(c, "incident %.2fg" % peak)
-                    # "Momentje": lichter dan incident-lock, geen bescherming, alleen een tijdstip
-                    # noteren -- ook een volwaardig incident telt mee als moment.
-                    if mthr > 0 and abs(peak - 1.0) >= (mthr - 1.0) and peak >= mthr and now - last_moment > 3:
-                        last_moment = now
-                        trip_add_moment(now, peak)
+                    # "Momentje": lichter dan incident-lock, geen bescherming, alleen een
+                    # tijdstip noteren -- relatief t.o.v. hoe ruig de rit sowieso al is.
+                    if sens in MOMENT_SENS:
+                        factor, floor = MOMENT_SENS[sens]
+                        dev = abs(peak - 1.0)
+                        if baseline is None:
+                            baseline = dev
+                        mthr = max(floor, baseline * factor)
+                        if dev > mthr:
+                            if now - last_moment > MOMENT_DEBOUNCE:
+                                last_moment = now
+                                trip_add_moment(now, peak, dev, baseline, mthr)
+                            else:
+                                # Binnen het venster wint de ZWAARSTE, niet de eerste -- anders
+                                # slokt een lichte trilling de echte klap 7 s later op (echt gezien).
+                                trip_upgrade_moment(now, peak, dev, baseline, mthr)
+                        baseline = baseline * (1 - MOMENT_ALPHA) + dev * MOMENT_ALPHA
         except Exception:
             pass
         time.sleep(1)
@@ -513,9 +535,21 @@ def _haversine_m(lat1, lon1, lat2, lon2):
     return 2 * r * math.asin(min(1.0, math.sqrt(a)))
 
 
-def trip_add_moment(t, g):
-    trip_state["moments"].append({"t": t, "g": round(g, 2)})
+def _moment_rec(t, g, dev, base, thr):
+    # dev/base/thr worden bewaard zodat de kalibratie later kan uitrekenen welke factor
+    # de door Menno als fout beoordeelde markeringen eruit had gefilterd.
+    return {"t": t, "g": round(g, 2), "dev": round(dev, 3), "base": round(base, 3), "thr": round(thr, 3)}
+
+
+def trip_add_moment(t, g, dev=0.0, base=0.0, thr=0.0):
+    trip_state["moments"].append(_moment_rec(t, g, dev, base, thr))
     trip_state["moments"] = trip_state["moments"][-200:]  # niet onbeperkt laten groeien op een lange rit
+
+
+def trip_upgrade_moment(t, g, dev, base, thr):
+    m = trip_state["moments"]
+    if m and g > m[-1].get("g", 0):
+        m[-1] = _moment_rec(t, g, dev, base, thr)
 
 
 def _trip_path(trip_id):
@@ -1918,7 +1952,9 @@ class H(BaseHTTPRequestHandler):
                 "standalone": rec_cfg.get("standalone", False), "err": rec_state.get("err", ""),
                 "seg": rec_cfg["seg"], "cap_gb": rec_cfg["cap_gb"], "w": rec_cfg["w"],
                 "h": rec_cfg["h"], "fps": rec_cfg["fps"], "gain": rec_cfg["gain"], "shutter": rec_cfg["shutter"],
-                "gforce": rec_cfg.get("gforce", 2.0),
+                "gforce": rec_cfg.get("gforce", 2.0), "rotation": rec_cfg.get("rotation", 0),
+                "moment_sens": rec_cfg.get("moment_sens", "med"),
+                "trip_keep_days": rec_cfg.get("trip_keep_days", 90),
                 "clips": len(files), "bytes": sum(os.path.getsize(f) for f in files if os.path.exists(f)),
                 "locked": sum(1 for f in files if clip_locked(f)),
             }))
@@ -1962,7 +1998,7 @@ class H(BaseHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             for k, cast in (("seg", int), ("cap_gb", int), ("w", int), ("h", int), ("fps", int),
                             ("gain", int), ("shutter", int), ("gforce", float), ("rotation", int),
-                            ("moment_gforce", float), ("trip_keep_days", int)):
+                            ("trip_keep_days", int)):
                 if k in q:
                     try:
                         v = cast(q[k][0])
@@ -1971,6 +2007,8 @@ class H(BaseHTTPRequestHandler):
                         rec_cfg[k] = v
                     except Exception:
                         pass
+            if "moment_sens" in q and q["moment_sens"][0] in ("off", "high", "med", "low"):
+                rec_cfg["moment_sens"] = q["moment_sens"][0]
             save_rec_settings()
             return self._send(200, "application/json", json.dumps(rec_cfg))
         if p in ("/clip_lock", "/clip_unlock"):
@@ -2018,6 +2056,63 @@ class H(BaseHTTPRequestHandler):
                 "trips": out, "current_id": trip_state["id"],
                 "hide_short": bool(ui_cfg.get("hide_short_trips", True)),
                 "keep_days": rec_cfg.get("trip_keep_days", 90)}))
+        if p == "/trip/moment_verdict":
+            # Menno beoordeelt een markering: klopt / fout / twijfel. Voedt /moments/calibration.
+            q = parse_qs(urlparse(self.path).query)
+            tid, mt, v = q.get("id", [""])[0], q.get("t", [""])[0], q.get("v", [""])[0]
+            if not (tid and re.match(r"^[0-9_]+$", tid) and mt and v in ("ok", "false", "maybe", "")):
+                return self._send(400, "application/json", json.dumps({"ok": False}))
+            try:
+                mt = float(mt)
+            except Exception:
+                return self._send(400, "application/json", json.dumps({"ok": False}))
+
+            def _apply(moments):
+                for m in moments:
+                    if abs(m.get("t", 0) - mt) < 0.5:
+                        if v:
+                            m["v"] = v
+                        else:
+                            m.pop("v", None)
+                        return True
+                return False
+
+            if trip_state["id"] == tid:
+                ok = _apply(trip_state["moments"])
+                if ok:
+                    _trip_write(finalized=False)
+                return self._send(200, "application/json", json.dumps({"ok": ok}))
+            try:
+                t = json.load(open(_trip_path(tid)))
+                ok = _apply(t.get("moments", []))
+                if ok:
+                    with open(_trip_path(tid), "w") as f:
+                        json.dump(t, f)
+                return self._send(200, "application/json", json.dumps({"ok": ok}))
+            except Exception:
+                return self._send(404, "application/json", json.dumps({"ok": False}))
+        if p == "/moments/calibration":
+            judged = []
+            for f in glob.glob(TRIPS_DIR + "/*.json"):
+                try:
+                    for m in json.load(open(f)).get("moments", []):
+                        if m.get("v") in ("ok", "false") and m.get("base", 0) > 0:
+                            judged.append((m["dev"] / m["base"], m["v"], m.get("g", 0)))
+                except Exception:
+                    pass
+            for m in trip_state["moments"]:
+                if m.get("v") in ("ok", "false") and m.get("base", 0) > 0:
+                    judged.append((m["dev"] / m["base"], m["v"], m.get("g", 0)))
+            bad = sorted(r for r, v, _ in judged if v == "false")
+            good = sorted(r for r, v, _ in judged if v == "ok")
+            out = {"judged": len(judged), "false": len(bad), "ok": len(good),
+                   "current": rec_cfg.get("moment_sens", "med"), "suggest": None, "overlap": False}
+            if bad and (not good or max(bad) < min(good)):
+                # ruimte tussen de twee groepen: kies er netjes het midden van
+                out["suggest"] = round((max(bad) + (min(good) if good else max(bad) + 1.0)) / 2.0, 2)
+            elif bad and good:
+                out["overlap"] = True
+            return self._send(200, "application/json", json.dumps(out))
         if p == "/trip_del":
             q = parse_qs(urlparse(self.path).query)
             tid = q.get("id", [""])[0]
@@ -2385,9 +2480,10 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
       <div class="k" data-t="tripKeep">Ritten bewaren</div><div class="v"><select class="ledsel" id="recTripKeep" style="width:auto">
         <option value="7">7 <span data-t="days">dagen</span></option><option value="30">30 dagen</option><option value="90">90 dagen</option><option value="365">1 jaar</option><option value="0" data-t="keepForever">altijd</option></select></div>
       <div class="k" data-t="momentThresh">Momentje-markering</div><div class="v"><select class="ledsel" id="recMoment" style="width:auto">
-        <option value="0" data-t="off">Uit</option><option value="1.15" data-t="sensHigh">Gevoelig (1.15 g)</option><option value="1.3" data-t="sensMed">Normaal (1.3 g)</option><option value="1.6" data-t="sensLow">Ongevoelig (1.6 g)</option></select></div>
+        <option value="off" data-t="off">Uit</option><option value="high" data-t="sensHigh">Gevoelig</option><option value="med" data-t="sensMed">Normaal</option><option value="low" data-t="sensLow">Ongevoelig</option></select></div>
     </div>
-    <div class="muted" style="font-size:11px;margin-top:6px" data-t="momentNote">Lichter dan incident-lock: markeert alleen een tijdstip (scherpe bocht, stevig remmen) — beschermt niks, telt mee in de ritsamenvatting.</div>
+    <div class="muted" style="font-size:11px;margin-top:6px" data-t="momentNote">Lichter dan incident-lock: markeert alleen een tijdstip (scherpe bocht, stevig remmen) — beschermt niks, telt mee in de ritsamenvatting. Meet t.o.v. hoe ruig de rit sowieso al loopt, dus wegtrilling telt niet mee.</div>
+    <div class="muted" id="momentCal" style="font-size:11px;margin-top:6px"></div>
     <div class="muted" style="font-size:11px;margin-top:10px" data-t="recNote">Standalone dashcam-modus: neemt op naar /mnt/data/clips (1080p30, hardware-H.264), oudste clips worden gewist boven de limiet, GPS + beweging meegelogd. "Camera uit" stopt de opname maar blijft standalone. Overleeft een reboot — werkt in de auto vanzelf zodra hij stroom krijgt.</div>
     <div class="muted" style="font-size:11px;margin-top:6px" data-t="lockNote">Incident-lock: bij een klap of noodstop boven de drempel wordt de clip beschermd 🔒 en nooit automatisch gewist.</div>
     <div style="margin-top:6px"><a id="recHive" style="font-size:11px;color:var(--mut);cursor:pointer" data-t="restoreHive">↩ Hivemapper-camera herstellen</a></div>
@@ -2555,6 +2651,10 @@ const I18N={nl:{},en:{
  perToday:'Today',perWeek:'7 days',perAll:'All',trips:'trips',tripTop:'top',hideShort:'hide short trips',
  delAllTrips:'delete all trips',confirmDelTrip:'Delete this trip?',confirmDelAllTrips:'Delete all trips? The trip currently running is kept.',
  tripAvg:'Average',tripNoSprint:'not reached',tripClips:'Recordings',tripKeep:'Keep trips',keepForever:'forever',days:'days',loading:'loading…',
+ calJudged:'rated',calOk:'correct',calFalse:'wrong',calMaybe:'unsure',
+ calOverlap:'The correct and wrong markers overlap — a threshold alone cannot separate them.',
+ calGap:'They separate cleanly; a stricter setting would drop the wrong ones and keep the correct ones.',
+ calMore:'Rate a few more to get a recommendation.',
  off:'Off',sensHigh:'Sensitive (1.5 g)',sensMed:'Normal (2.0 g)',sensLow:'Low (3.0 g)',
  recNote:'Standalone dashcam mode: records to /mnt/data/clips (1080p30, hardware H.264), oldest clips are deleted past the limit, GPS + motion logged alongside. "Camera off" stops recording but stays standalone. Survives a reboot — in a car it just runs whenever it has power.',
  lockNote:'Incident lock: on an impact or hard stop above the threshold the clip is protected 🔒 and never auto-deleted.',
@@ -2843,7 +2943,7 @@ async function loadRec(){try{const d=await jget('/rec/status');const run=d.runni
   $('recClips').textContent=d.clips+' '+tt('clips','clips')+' · '+fmtBytes(d.bytes)+(d.locked?'  ·  🔒 '+d.locked:'');
   $('recStart').className='ledbtn'+(run?' on':'');$('recStop').className='ledbtn'+(!run&&d.standalone?' on':'');
   if(d.err){$('recErr').style.display='block';$('recErr').textContent='⚠ '+d.err;}else{$('recErr').style.display='none';}
-  if($('recSeg').dataset.init!=='1'){$('recSeg').value=d.seg;$('recCap').value=d.cap_gb;$('recG').value=String(d.gforce??2);$('recMoment').value=String(d.moment_gforce??1.3);$('recQuality').value=d.w+'x'+d.h+'x'+d.fps;$('recRotation').value=String(d.rotation||0);$('recTripKeep').value=String(d.trip_keep_days??90);$('recSeg').dataset.init='1';}
+  if($('recSeg').dataset.init!=='1'){$('recSeg').value=d.seg;$('recCap').value=d.cap_gb;$('recG').value=String(d.gforce??2);$('recMoment').value=d.moment_sens||'med';$('recQuality').value=d.w+'x'+d.h+'x'+d.fps;$('recRotation').value=String(d.rotation||0);$('recTripKeep').value=String(d.trip_keep_days??90);$('recSeg').dataset.init='1';}
 }catch(e){}}
 $('recStart').onclick=async()=>{$('recStat').textContent=tt('freeing','camera vrijmaken…');await fetch('/rec/start');setTimeout(loadRec,8000);};
 $('recStop').onclick=async()=>{$('recStat').textContent=tt('stopping','opname stoppen…');await fetch('/rec/stop');setTimeout(loadRec,2500);};
@@ -2851,7 +2951,18 @@ $('recHive').onclick=async()=>{if(!confirm(tt('confirmHive','Hivemapper-camera h
 $('recSeg').onchange=()=>fetch('/rec/set?seg='+$('recSeg').value);
 $('recCap').onchange=()=>fetch('/rec/set?cap_gb='+$('recCap').value);
 $('recG').onchange=()=>fetch('/rec/set?gforce='+$('recG').value);
-$('recMoment').onchange=()=>fetch('/rec/set?moment_gforce='+$('recMoment').value);
+$('recMoment').onchange=()=>fetch('/rec/set?moment_sens='+$('recMoment').value);
+async function loadMomentCal(){
+  try{
+    const c=await jget('/moments/calibration'),el=$('momentCal');
+    if(!c.judged){el.textContent='';return;}
+    let s=c.judged+' '+tt('calJudged','beoordeeld')+': '+c.ok+' '+tt('calOk','klopt')+', '+c.false+' '+tt('calFalse','fout')+'. ';
+    if(c.overlap)s+=tt('calOverlap','De juiste en foute markeringen liggen door elkaar heen — met een drempel alleen zijn ze niet te scheiden.');
+    else if(c.suggest)s+=tt('calGap','Ze zijn goed te scheiden; met een strengere instelling verdwijnen de foute en blijven de juiste staan.');
+    else s+=tt('calMore','Beoordeel er nog een paar om een advies te kunnen geven.');
+    el.textContent=s;
+  }catch(e){}
+}
 $('recTripKeep').onchange=()=>fetch('/rec/set?trip_keep_days='+$('recTripKeep').value);
 async function applyRecChangeAndRestart(qs){
   await fetch('/rec/set?'+qs);
@@ -2900,7 +3011,7 @@ $('loraMeshTest').onclick=async()=>{
   try{await fetch('/lora/mesh_test');}catch(e){}
   setTimeout(()=>{$('loraMeshTest').disabled=false;loadLora();},800);
 };
-setInterval(()=>{if(document.querySelector('.tabbtn[data-tab="settings"]').classList.contains('on'))loadLora();},4000);
+setInterval(()=>{if(document.querySelector('.tabbtn[data-tab="settings"]').classList.contains('on')){loadLora();loadMomentCal();}},4000);
 // lopende rit bijwerken terwijl je ernaar kijkt
 setInterval(()=>{if(document.querySelector('.tabbtn[data-tab="terug"]').classList.contains('on'))loadTrips();},10000);
 
@@ -3016,8 +3127,16 @@ async function fillTripDetail(id){
       ?t.zero_to_100.map(z=>z.s.toFixed(2)+'s <span class="muted">('+tripOffset(z.t-t.start)+')</span>').join(' · ')
       :'<span class="muted">'+tt('tripNoSprint','niet gehaald')+'</span>')+'</div>';
     rows+='<div class="k">'+tt('tripMoments','Momentjes')+'</div><div class="v">'+(t.moments&&t.moments.length
-      ?t.moments.slice(0,25).map(m=>tripOffset(m.t-t.start)+' <span class="muted">'+m.g.toFixed(2)+'g</span>').join(' · ')
-        +(t.moments.length>25?' <span class="muted">+'+(t.moments.length-25)+'</span>':'')
+      ?'<div style="display:flex;flex-direction:column;gap:3px">'+t.moments.slice(0,25).map(m=>{
+          const vb=(v,lbl,ttl)=>{const next=(m.v===v)?'':v;  // nogmaals klikken = oordeel weer weghalen
+            return '<button class="clipbtn'+(m.v===v?' play':'')+'" style="padding:2px 7px;font-size:11px" title="'+ttl+'"'
+              +' onclick="rateMoment(\''+t.id+'\','+m.t+',\''+next+'\')">'+lbl+'</button>';};
+          return '<span style="display:flex;align-items:center;gap:6px">'
+            +'<span style="font-variant-numeric:tabular-nums;min-width:96px">'+tripOffset(m.t-t.start)
+            +' <span class="muted">'+m.g.toFixed(2)+'g</span></span>'
+            +vb('ok','✓',tt('calOk','klopt'))+vb('maybe','?',tt('calMaybe','twijfel'))+vb('false','✕',tt('calFalse','fout'))
+            +'</span>';}).join('')
+        +(t.moments.length>25?'<span class="muted">+'+(t.moments.length-25)+'</span>':'')+'</div>'
       :'<span class="muted">–</span>')+'</div>';
     rows+='<div class="k">'+tt('tripClips','Opnames')+'</div><div class="v">'+(clips.length
       ?'<a style="cursor:pointer" onclick="showTripClips('+t.start+','+t.end+')">'+clips.length+' '+tt('clips','clips')+' →</a>'
@@ -3026,6 +3145,10 @@ async function fillTripDetail(id){
   }catch(e){box.innerHTML='<span class="muted">–</span>';}
 }
 function toggleTrip(id){TRIP_OPEN=(TRIP_OPEN===id)?null:id;renderTrips();}
+async function rateMoment(id,t,v){
+  await fetch('/trip/moment_verdict?id='+encodeURIComponent(id)+'&t='+t+'&v='+v);
+  fillTripDetail(id);loadMomentCal();
+}
 function showTripClips(start,end){
   CLIP_FILTER='all';CLIP_SHOWN=200;renderClips();
   const first=CLIPS_ALL.filter(c=>c.mtime/1000>=start-60&&c.mtime/1000<=end+60)[0];
