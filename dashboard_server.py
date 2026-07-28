@@ -221,10 +221,11 @@ def imu_latest(n=60):
 # ---- Eigen dashcam-recorder ----
 CLIPS_DIR = "/mnt/data/clips"
 REC_DEFAULT = {"on": False, "standalone": False, "seg": 60, "cap_gb": 15, "w": 1920, "h": 1080,
-               "fps": 30, "gain": 0, "shutter": 0, "gforce": 2.0, "rotation": 0, "moment_gforce": 1.3}
+               "fps": 30, "gain": 0, "shutter": 0, "gforce": 2.0, "rotation": 0, "moment_gforce": 1.3,
+               "trip_keep_days": 90}
 rec_cfg = dict(REC_DEFAULT)
 rec_state = {"proc": None, "err": "", "started": 0.0}
-UI_DEFAULT = {"lang": "en", "units": "kmh"}  # standaard Engels; NL/mph instelbaar in de UI
+UI_DEFAULT = {"lang": "en", "units": "kmh", "hide_short_trips": True}  # standaard Engels; NL/mph instelbaar in de UI
 ui_cfg = dict(UI_DEFAULT)
 
 
@@ -448,6 +449,18 @@ def retention_loop():
                         srt = victim[:-4] + ".srt"
                         if os.path.exists(srt):
                             os.remove(srt)
+                    except Exception:
+                        pass
+            # Ritsamenvattingen zijn ~1 KB, dus dit gaat niet over ruimte maar over een
+            # overzichtelijke lijst. 0 = altijd bewaren. Loopt hier mee zodat er geen
+            # extra thread nodig is.
+            keep = int(rec_cfg.get("trip_keep_days", 90) or 0)
+            if keep > 0:
+                cutoff = time.time() - keep * 86400
+                for f in glob.glob(TRIPS_DIR + "/*.json"):
+                    try:
+                        if os.path.getmtime(f) < cutoff and os.path.basename(f)[:-5] != trip_state.get("id"):
+                            os.remove(f)
                     except Exception:
                         pass
         except Exception:
@@ -899,6 +912,29 @@ LORA_DEFAULT = {"backend": "off", "deveui": "", "appkey": "", "joineui": "000000
 lora_cfg = dict(LORA_DEFAULT)
 lora_state = {"status": "off", "backend": "off", "devaddr": None, "attempts": 0, "uplinks": 0,
               "last_join_attempt": 0, "last_uplink": 0, "last_error": ""}
+# Dit toestel staat niet continu onder spanning (gaat aan/uit met het contact), dus alleen-in-
+# geheugen tellers zoals attempts/uplinks zouden bij elk kort ritje weer op 0 beginnen. Deze paar
+# velden checkpointen we naar schijf zodat ze een dag vol korte ritjes overleven.
+LORA_STATE_PATH = "/mnt/data/lora_state.json"
+LORA_STATE_PERSIST_KEYS = ("attempts", "uplinks", "last_join_attempt", "last_uplink", "last_error", "devaddr")
+
+
+def load_lora_state():
+    try:
+        d = json.load(open(LORA_STATE_PATH))
+        for k in LORA_STATE_PERSIST_KEYS:
+            if k in d:
+                lora_state[k] = d[k]
+    except Exception:
+        pass
+
+
+def save_lora_state():
+    try:
+        with open(LORA_STATE_PATH, "w") as f:
+            json.dump({k: lora_state[k] for k in LORA_STATE_PERSIST_KEYS}, f)
+    except Exception:
+        pass
 
 # ---- Meshtastic backend (optional second choice) ----
 # Needs meshtasticd + its .so dependencies manually staged under MESHTASTICD_DIR --
@@ -1444,6 +1480,7 @@ def lora_loop():
                 next_join_attempt = time.time() + 60
                 lora_state["attempts"] += 1
                 lora_state["last_join_attempt"] = time.time()
+                save_lora_state()
                 try:
                     deveui = bytes.fromhex(lora_cfg["deveui"])
                     appkey = bytes.fromhex(lora_cfg["appkey"])
@@ -1469,10 +1506,12 @@ def lora_loop():
                         lora_state["status"] = "joined"
                         lora_state["devaddr"] = result["devaddr"].hex()
                         next_uplink = 0.0
+                        save_lora_state()
                     else:
                         lora_state["status"] = "searching"
                 except Exception as e:
                     lora_state["last_error"] = str(e)
+                    save_lora_state()
                 continue
 
             # sessie actief: periodiek een klein positiebakentje sturen
@@ -1495,8 +1534,10 @@ def lora_loop():
                 fcnt += 1
                 lora_state["uplinks"] += 1
                 lora_state["last_uplink"] = time.time()
+                save_lora_state()
             except Exception as e:
                 lora_state["last_error"] = str(e)
+                save_lora_state()
         except Exception as e:
             lora_state["last_error"] = str(e)
             time.sleep(5)
@@ -1802,6 +1843,8 @@ class H(BaseHTTPRequestHandler):
                 ui_cfg["lang"] = q["lang"][0]
             if "units" in q and q["units"][0] in ("kmh", "mph"):
                 ui_cfg["units"] = q["units"][0]
+            if "hide_short_trips" in q:
+                ui_cfg["hide_short_trips"] = q["hide_short_trips"][0] in ("1", "true")
             save_ui_settings()
             return self._send(200, "application/json", json.dumps(ui_cfg))
         if p == "/lora/status":
@@ -1819,9 +1862,11 @@ class H(BaseHTTPRequestHandler):
                 meshtastic_send_text("Roamcam test " + time.strftime("%H:%M:%S"))
                 lora_state["uplinks"] = lora_state.get("uplinks", 0) + 1
                 lora_state["last_uplink"] = time.time()
+                save_lora_state()
                 return self._send(200, "application/json", json.dumps({"ok": True}))
             except Exception as e:
                 lora_state["last_error"] = str(e)
+                save_lora_state()
                 return self._send(200, "application/json", json.dumps({"ok": False, "error": str(e)}))
         if p == "/lora/set":
             q = parse_qs(urlparse(self.path).query)
@@ -1917,7 +1962,7 @@ class H(BaseHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             for k, cast in (("seg", int), ("cap_gb", int), ("w", int), ("h", int), ("fps", int),
                             ("gain", int), ("shutter", int), ("gforce", float), ("rotation", int),
-                            ("moment_gforce", float)):
+                            ("moment_gforce", float), ("trip_keep_days", int)):
                 if k in q:
                     try:
                         v = cast(q[k][0])
@@ -1946,11 +1991,11 @@ class H(BaseHTTPRequestHandler):
         if p == "/trips.json":
             out = []
             files = sorted(glob.glob(TRIPS_DIR + "/*.json"), reverse=True)
-            for f in files[:100]:
+            for f in files[:300]:
                 try:
                     t = json.load(open(f))
                     out.append({
-                        "id": t["id"], "start": t["start"], "end": t["end"], "finalized": t.get("finalized", True),
+                        "id": t["id"], "start": t["start"], "end": t["end"],
                         "distance_km": t.get("distance_km", 0), "max_speed_kmh": t.get("max_speed_kmh", 0),
                         "zero_to_100_best": (min(z["s"] for z in t["zero_to_100"]) if t.get("zero_to_100") else None),
                         "zero_to_100_count": len(t.get("zero_to_100", [])),
@@ -1960,14 +2005,40 @@ class H(BaseHTTPRequestHandler):
                     pass
             if trip_state["id"] and not any(o["id"] == trip_state["id"] for o in out):
                 out.insert(0, {
-                    "id": trip_state["id"], "start": trip_state["start"], "end": time.time(), "finalized": False,
+                    "id": trip_state["id"], "start": trip_state["start"], "end": time.time(),
                     "distance_km": round(trip_state["distance_m"] / 1000.0, 2),
                     "max_speed_kmh": round(trip_state["max_speed_kmh"], 1),
                     "zero_to_100_best": (min(z["s"] for z in trip_state["zero_to_100"]) if trip_state["zero_to_100"] else None),
                     "zero_to_100_count": len(trip_state["zero_to_100"]),
                     "moments_count": len(trip_state["moments"]),
                 })
-            return self._send(200, "application/json", json.dumps(out))
+            # current_id i.p.v. het "finalized"-vlaggetje: de stroom valt weg met het contact,
+            # dus een rit wordt bijna nooit netjes afgesloten -- alleen de actieve rit loopt echt.
+            return self._send(200, "application/json", json.dumps({
+                "trips": out, "current_id": trip_state["id"],
+                "hide_short": bool(ui_cfg.get("hide_short_trips", True)),
+                "keep_days": rec_cfg.get("trip_keep_days", 90)}))
+        if p == "/trip_del":
+            q = parse_qs(urlparse(self.path).query)
+            tid = q.get("id", [""])[0]
+            if tid and re.match(r"^[0-9_]+$", tid) and tid != trip_state["id"]:
+                try:
+                    os.remove(_trip_path(tid))
+                    return self._send(200, "application/json", json.dumps({"ok": True}))
+                except Exception:
+                    pass
+            return self._send(400, "application/json", json.dumps({"ok": False}))
+        if p == "/trips/delete_all":
+            removed = 0
+            for f in glob.glob(TRIPS_DIR + "/*.json"):
+                if os.path.basename(f)[:-5] == trip_state["id"]:
+                    continue  # de lopende rit nooit weggooien
+                try:
+                    os.remove(f)
+                    removed += 1
+                except Exception:
+                    pass
+            return self._send(200, "application/json", json.dumps({"ok": True, "removed": removed}))
         if p == "/trip":
             q = parse_qs(urlparse(self.path).query)
             tid = q.get("id", [""])[0]
@@ -2153,6 +2224,15 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
 .tabbtn{flex:1;min-width:90px;padding:10px 12px;border:0;background:transparent;color:var(--mut);border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;white-space:nowrap}
 .tabbtn.on{background:#0d3a63;color:#9fd0ff}
 .card.hidden{display:none}
+.triptotals{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:10px 15px;border-bottom:1px solid var(--bd)}
+.triptotals b{font-size:19px;font-weight:600;font-variant-numeric:tabular-nums}
+.triptotals span{font-size:12px;color:var(--mut)}
+.tripday{padding:6px 15px;font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--mut);background:var(--card2)}
+.tripcols{flex:1;min-width:0;font-size:13px;font-variant-numeric:tabular-nums;display:flex;gap:14px;flex-wrap:wrap}
+.tripcols b{font-family:var(--mono);font-weight:600}
+.tripdot{width:8px;height:8px;border-radius:50%;flex:none;background:transparent}
+.tripdot.live{background:var(--ok);box-shadow:0 0 6px var(--ok)}
+.tripdetail{padding:2px 15px 12px 35px;background:var(--card2);border-bottom:1px solid var(--bd);font-size:12px}
 .recdel{flex:1;background:#3d1414;color:#f87171;border:0;border-radius:5px;padding:4px;cursor:pointer;font-size:11px}
 .recdl{flex:1;text-align:center;background:#10233d;color:#7cc4ff;border-radius:5px;padding:4px;text-decoration:none;font-size:11px}
 .cliprow{display:flex;align-items:center;gap:12px;padding:9px 12px;border-bottom:1px solid var(--bd)}
@@ -2244,8 +2324,19 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
     </div>
   </div>
 
-  <div class="card span2" data-tab="terug"><h2><span data-t="cTrips">Ritten</span></h2><div class="body">
+  <div class="card span2" data-tab="terug"><h2><span data-t="cTrips">Ritten</span>
+    <span class="segbtns" style="text-transform:none;letter-spacing:0">
+      <button class="segbtn on" id="tripPerToday" data-t="perToday">Vandaag</button>
+      <button class="segbtn" id="tripPerWeek" data-t="perWeek">7 dagen</button>
+      <button class="segbtn" id="tripPerAll" data-t="perAll">Alles</button>
+    </span></h2><div class="body" style="padding:0">
+    <div class="triptotals" id="tripTotals"></div>
     <div id="tripsList"></div>
+    <div style="padding:10px 15px;border-top:1px solid var(--bd);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <label class="selall"><input type="checkbox" id="tripHideShort" checked> <span data-t="hideShort">korte ritjes verbergen</span></label>
+      <div style="flex:1"></div>
+      <button class="clipbtn del" id="tripDelAll" data-t="delAllTrips">wis alle ritten</button>
+    </div>
   </div></div>
 
   <div class="card span2" data-tab="terug"><h2><span data-t="cClips">Video-opnames</span> <span id="clipCount" class="muted" style="font-weight:400"></span></h2><div class="body">
@@ -2291,6 +2382,8 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
       <div class="k" data-t="storeLimit">Bewaarlimiet</div><div class="v"><select class="ledsel" id="recCap" style="width:auto"><option value="5">5 GB</option><option value="10">10 GB</option><option value="15">15 GB</option><option value="20">20 GB</option></select></div>
       <div class="k" data-t="incLock">Incident-lock</div><div class="v"><select class="ledsel" id="recG" style="width:auto">
         <option value="0" data-t="off">Uit</option><option value="1.5" data-t="sensHigh">Gevoelig (1.5 g)</option><option value="2" data-t="sensMed">Normaal (2.0 g)</option><option value="3" data-t="sensLow">Ongevoelig (3.0 g)</option></select></div>
+      <div class="k" data-t="tripKeep">Ritten bewaren</div><div class="v"><select class="ledsel" id="recTripKeep" style="width:auto">
+        <option value="7">7 <span data-t="days">dagen</span></option><option value="30">30 dagen</option><option value="90">90 dagen</option><option value="365">1 jaar</option><option value="0" data-t="keepForever">altijd</option></select></div>
       <div class="k" data-t="momentThresh">Momentje-markering</div><div class="v"><select class="ledsel" id="recMoment" style="width:auto">
         <option value="0" data-t="off">Uit</option><option value="1.15" data-t="sensHigh">Gevoelig (1.15 g)</option><option value="1.3" data-t="sensMed">Normaal (1.3 g)</option><option value="1.6" data-t="sensLow">Ongevoelig (1.6 g)</option></select></div>
     </div>
@@ -2457,7 +2550,11 @@ const I18N={nl:{},en:{
  status:'Status',segLen:'Segment length',storeLimit:'Storage limit',incLock:'Incident lock',quality:'Quality',
  rotation:'Rotation',rotation0:'0° (normal)',rotation180:'180° (upside down)',
  momentThresh:'Moment marker',momentNote:'Lighter than incident-lock: just notes a timestamp (sharp corner, hard braking) — protects nothing, counts toward the trip summary.',
- cTrips:'Trips',tripDist:'Distance',tripMaxSpeed:'Top speed',tripZeroHundred:'0-100',tripMoments:'Moments',tripNone:'No trips yet',tripInProgress:'in progress',
+ cTrips:'Trips',tripDist:'Distance',tripMaxSpeed:'Top speed',tripZeroHundred:'0-100',tripMoments:'Moments',
+ tripNone:'no trips yet — start recording in Settings',tripNonePeriod:'no trips in this period',
+ perToday:'Today',perWeek:'7 days',perAll:'All',trips:'trips',tripTop:'top',hideShort:'hide short trips',
+ delAllTrips:'delete all trips',confirmDelTrip:'Delete this trip?',confirmDelAllTrips:'Delete all trips? The trip currently running is kept.',
+ tripAvg:'Average',tripNoSprint:'not reached',tripClips:'Recordings',tripKeep:'Keep trips',keepForever:'forever',days:'days',loading:'loading…',
  off:'Off',sensHigh:'Sensitive (1.5 g)',sensMed:'Normal (2.0 g)',sensLow:'Low (3.0 g)',
  recNote:'Standalone dashcam mode: records to /mnt/data/clips (1080p30, hardware H.264), oldest clips are deleted past the limit, GPS + motion logged alongside. "Camera off" stops recording but stays standalone. Survives a reboot — in a car it just runs whenever it has power.',
  lockNote:'Incident lock: on an impact or hard stop above the threshold the clip is protected 🔒 and never auto-deleted.',
@@ -2732,7 +2829,7 @@ function showTab(tab){const leavingLive=(document.querySelector('.tabbtn.on')?.d
   document.querySelectorAll('.card').forEach(c=>c.classList.toggle('hidden',(c.dataset.tab||'live')!==tab));
   document.querySelectorAll('.tabbtn').forEach(b=>b.classList.toggle('on',b.dataset.tab===tab));
   if(leavingLive&&PREVIEW_ON)setPreview(false);
-  if(tab==='terug'){loadClips();loadTrips();}
+  if(tab==='terug'){loadClips().then(loadTrips);}  // clips eerst: het ritdetail koppelt clips aan een rit
   if(tab==='settings'){loadRec();loadLedState();loadLora();loadWifi();}}
 document.querySelectorAll('.tabbtn').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 
@@ -2746,7 +2843,7 @@ async function loadRec(){try{const d=await jget('/rec/status');const run=d.runni
   $('recClips').textContent=d.clips+' '+tt('clips','clips')+' · '+fmtBytes(d.bytes)+(d.locked?'  ·  🔒 '+d.locked:'');
   $('recStart').className='ledbtn'+(run?' on':'');$('recStop').className='ledbtn'+(!run&&d.standalone?' on':'');
   if(d.err){$('recErr').style.display='block';$('recErr').textContent='⚠ '+d.err;}else{$('recErr').style.display='none';}
-  if($('recSeg').dataset.init!=='1'){$('recSeg').value=d.seg;$('recCap').value=d.cap_gb;$('recG').value=String(d.gforce??2);$('recMoment').value=String(d.moment_gforce??1.3);$('recQuality').value=d.w+'x'+d.h+'x'+d.fps;$('recRotation').value=String(d.rotation||0);$('recSeg').dataset.init='1';}
+  if($('recSeg').dataset.init!=='1'){$('recSeg').value=d.seg;$('recCap').value=d.cap_gb;$('recG').value=String(d.gforce??2);$('recMoment').value=String(d.moment_gforce??1.3);$('recQuality').value=d.w+'x'+d.h+'x'+d.fps;$('recRotation').value=String(d.rotation||0);$('recTripKeep').value=String(d.trip_keep_days??90);$('recSeg').dataset.init='1';}
 }catch(e){}}
 $('recStart').onclick=async()=>{$('recStat').textContent=tt('freeing','camera vrijmaken…');await fetch('/rec/start');setTimeout(loadRec,8000);};
 $('recStop').onclick=async()=>{$('recStat').textContent=tt('stopping','opname stoppen…');await fetch('/rec/stop');setTimeout(loadRec,2500);};
@@ -2755,6 +2852,7 @@ $('recSeg').onchange=()=>fetch('/rec/set?seg='+$('recSeg').value);
 $('recCap').onchange=()=>fetch('/rec/set?cap_gb='+$('recCap').value);
 $('recG').onchange=()=>fetch('/rec/set?gforce='+$('recG').value);
 $('recMoment').onchange=()=>fetch('/rec/set?moment_gforce='+$('recMoment').value);
+$('recTripKeep').onchange=()=>fetch('/rec/set?trip_keep_days='+$('recTripKeep').value);
 async function applyRecChangeAndRestart(qs){
   await fetch('/rec/set?'+qs);
   if(RECORDER_RUNNING){
@@ -2803,6 +2901,8 @@ $('loraMeshTest').onclick=async()=>{
   setTimeout(()=>{$('loraMeshTest').disabled=false;loadLora();},800);
 };
 setInterval(()=>{if(document.querySelector('.tabbtn[data-tab="settings"]').classList.contains('on'))loadLora();},4000);
+// lopende rit bijwerken terwijl je ernaar kijkt
+setInterval(()=>{if(document.querySelector('.tabbtn[data-tab="terug"]').classList.contains('on'))loadTrips();},10000);
 
 // ---- Thuisnetwerk + dashboard-wachtwoord ----
 let WIFI_LOADED_ONCE=false;
@@ -2831,7 +2931,7 @@ async function loadPrefs(){try{const d=await jget('/ui/get');LANG=d.lang||'en';U
   $('uiLang').value=LANG;$('uiUnits').value=UNITS;applyLang();fillLedSelects();loadLedState();
 }catch(e){}}
 $('uiLang').onchange=async()=>{LANG=$('uiLang').value;applyLang();fillLedSelects();loadLedState();
-  await fetch('/ui/set?lang='+LANG);loadRec();loadClips();tick();};
+  await fetch('/ui/set?lang='+LANG);loadRec();loadClips();renderTrips();tick();};
 $('uiUnits').onchange=async()=>{UNITS=$('uiUnits').value;await fetch('/ui/set?units='+UNITS);tick();tickSys();};
 
 // ---- Video-clips ----
@@ -2845,25 +2945,104 @@ function playClip(n,label){const v=$('clipVideo');v.pause();v.innerHTML='';v.rem
   $('clipPlayer').scrollIntoView({behavior:'smooth',block:'nearest'});}
 
 // ---- Terugkijken: filter, selectie, paginering, bulkacties ----
+// Ritdata staat al in km/u en km (niet m/s zoals spd()/dist() hierboven verwachten).
+const tspd=kmh=>UNITS==='mph'?{v:kmh*0.621371,u:'mph'}:{v:kmh,u:'km/u'};
+const tdist=km=>UNITS==='mph'?{v:km*0.621371,u:'mi'}:{v:km,u:'km'};
+let TRIPS_ALL=[],TRIP_CURRENT=null,TRIP_PERIOD='today',TRIP_OPEN=null,TRIP_HIDE_SHORT=true;
+// Een rit onder deze grens is een stukje rangeren / stilstaan met contact aan, geen rit.
+const TRIP_SHORT_SEC=60,TRIP_SHORT_KM=0.2;
+function tripIsShort(t){return (t.end-t.start)<TRIP_SHORT_SEC||t.distance_km<TRIP_SHORT_KM;}
+function tripsVisible(){
+  const now=Date.now()/1000;
+  const cut=TRIP_PERIOD==='today'?(new Date().setHours(0,0,0,0)/1000):(TRIP_PERIOD==='week'?now-7*86400:0);
+  return TRIPS_ALL.filter(t=>t.start>=cut).filter(t=>!(TRIP_HIDE_SHORT&&tripIsShort(t)&&t.id!==TRIP_CURRENT));
+}
+function fmtMin(s){s=Math.round(s);if(s<60)return s+' s';const m=Math.round(s/60);
+  return m<60?m+' min':Math.floor(m/60)+'u '+String(m%60).padStart(2,'0');}
+function tripOffset(sec){sec=Math.max(0,Math.round(sec));return '+'+Math.floor(sec/60)+':'+String(sec%60).padStart(2,'0');}
 async function loadTrips(){
   try{
-    const trips=await jget('/trips.json');
-    const el=$('tripsList');
-    if(!trips.length){el.innerHTML='<div class="muted">'+tt('tripNone','Nog geen ritten')+'</div>';return;}
-    el.innerHTML=trips.map(t=>{
-      const dt=new Date(t.start*1000).toLocaleString('nl-NL',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
-      const dur=fmtDur(t.end-t.start);
-      const zh=t.zero_to_100_best?t.zero_to_100_best.toFixed(2)+'s'+(t.zero_to_100_count>1?' ('+t.zero_to_100_count+'x)':''):'–';
-      return '<div class="kv" style="border-top:1px solid var(--bd);padding-top:8px;margin-top:8px">'
-        +'<div class="k">'+dt+(t.finalized?'':' · <span class="pill y" style="font-size:10px">'+tt('tripInProgress','bezig')+'</span>')+'</div><div class="v">'+dur+'</div>'
-        +'<div class="k">'+tt('tripDist','Afstand')+'</div><div class="v">'+t.distance_km+' km</div>'
-        +'<div class="k">'+tt('tripMaxSpeed','Topsnelheid')+'</div><div class="v">'+t.max_speed_kmh+' km/u</div>'
-        +'<div class="k">0-100</div><div class="v">'+zh+'</div>'
-        +'<div class="k">'+tt('tripMoments','Momentjes')+'</div><div class="v">'+t.moments_count+'</div>'
-        +'</div>';
-    }).join('');
+    const d=await jget('/trips.json');
+    TRIPS_ALL=d.trips||[];TRIP_CURRENT=d.current_id||null;
+    if($('tripHideShort').dataset.init!=='1'){TRIP_HIDE_SHORT=!!d.hide_short;$('tripHideShort').checked=TRIP_HIDE_SHORT;$('tripHideShort').dataset.init='1';}
+    renderTrips();
   }catch(e){}
 }
+function renderTrips(){
+  const list=tripsVisible(),el=$('tripsList'),loc=LANG==='en'?'en-GB':'nl-NL';
+  const km=list.reduce((a,t)=>a+(t.distance_km||0),0);
+  const top=list.reduce((a,t)=>Math.max(a,t.max_speed_kmh||0),0);
+  $('tripTotals').innerHTML=list.length
+    ?('<b>'+tdist(km).v.toFixed(1)+'</b> <span>'+tdist(km).u+'</span>'
+      +'<b>'+list.length+'</b> <span>'+tt('trips','ritten')+'</span>'
+      +'<b>'+Math.round(tspd(top).v)+'</b> <span>'+tspd(top).u+' '+tt('tripTop','top')+'</span>')
+    :'';
+  if(!list.length){el.innerHTML='<div class="muted" style="padding:14px 15px">'
+    +(TRIPS_ALL.length?tt('tripNonePeriod','geen ritten in deze periode'):tt('tripNone','nog geen ritten — start de opname in Instellingen'))+'</div>';return;}
+  let html='',lastDay='';
+  list.forEach(t=>{
+    const dt=new Date(t.start*1000);
+    const day=dt.toLocaleDateString(loc,{weekday:'long',day:'2-digit',month:'long'});
+    if(day!==lastDay){html+='<div class="tripday">'+day+'</div>';lastDay=day;}
+    const live=t.id===TRIP_CURRENT,open=t.id===TRIP_OPEN;
+    html+='<div class="cliprow">'
+      +'<span class="tripdot'+(live?' live':'')+'"></span>'
+      +'<div class="tripcols">'
+      +'<b>'+dt.toLocaleTimeString(loc,{hour:'2-digit',minute:'2-digit'})+'</b>'
+      +'<span class="muted">'+fmtMin(t.end-t.start)+'</span>'
+      +'<span>'+tdist(t.distance_km).v.toFixed(1)+' '+tdist(t.distance_km).u+'</span>'
+      +'<span>'+Math.round(tspd(t.max_speed_kmh).v)+' '+tspd(t.max_speed_kmh).u+'</span>'
+      +(t.moments_count?'<span style="color:var(--warn)">⚡ '+t.moments_count+'</span>':'')
+      +(t.zero_to_100_best?'<span style="color:var(--acc)">0-100 '+t.zero_to_100_best.toFixed(2)+'s</span>':'')
+      +'</div><div class="clipbtns">'
+      +'<button class="clipbtn'+(open?' play':'')+'" onclick="toggleTrip(\''+t.id+'\')">'+(open?'▲':'▼')+'</button>'
+      +(live?'':'<button class="clipbtn del" onclick="delTrip(\''+t.id+'\')">'+tt('del','wis')+'</button>')
+      +'</div></div>'
+      +(open?'<div class="tripdetail" id="tripDetail_'+t.id+'"><span class="muted">'+tt('loading','laden…')+'</span></div>':'');
+  });
+  el.innerHTML=html;
+  if(TRIP_OPEN)fillTripDetail(TRIP_OPEN);
+}
+async function fillTripDetail(id){
+  const box=$('tripDetail_'+id);if(!box)return;
+  try{
+    const t=await jget('/trip?id='+encodeURIComponent(id));
+    const secs=Math.max(1,t.end-t.start);
+    const avg=(t.distance_km/(secs/3600));
+    const clips=CLIPS_ALL.filter(c=>c.mtime/1000>=t.start-60&&c.mtime/1000<=t.end+60);
+    let rows='<div class="kv" style="padding-top:8px">'
+      +'<div class="k">'+tt('tripAvg','Gemiddeld')+'</div><div class="v">'+Math.round(tspd(avg).v)+' '+tspd(avg).u+'</div>';
+    rows+='<div class="k">0-100</div><div class="v">'+(t.zero_to_100&&t.zero_to_100.length
+      ?t.zero_to_100.map(z=>z.s.toFixed(2)+'s <span class="muted">('+tripOffset(z.t-t.start)+')</span>').join(' · ')
+      :'<span class="muted">'+tt('tripNoSprint','niet gehaald')+'</span>')+'</div>';
+    rows+='<div class="k">'+tt('tripMoments','Momentjes')+'</div><div class="v">'+(t.moments&&t.moments.length
+      ?t.moments.slice(0,25).map(m=>tripOffset(m.t-t.start)+' <span class="muted">'+m.g.toFixed(2)+'g</span>').join(' · ')
+        +(t.moments.length>25?' <span class="muted">+'+(t.moments.length-25)+'</span>':'')
+      :'<span class="muted">–</span>')+'</div>';
+    rows+='<div class="k">'+tt('tripClips','Opnames')+'</div><div class="v">'+(clips.length
+      ?'<a style="cursor:pointer" onclick="showTripClips('+t.start+','+t.end+')">'+clips.length+' '+tt('clips','clips')+' →</a>'
+      :'<span class="muted">–</span>')+'</div>';
+    box.innerHTML=rows+'</div>';
+  }catch(e){box.innerHTML='<span class="muted">–</span>';}
+}
+function toggleTrip(id){TRIP_OPEN=(TRIP_OPEN===id)?null:id;renderTrips();}
+function showTripClips(start,end){
+  CLIP_FILTER='all';CLIP_SHOWN=200;renderClips();
+  const first=CLIPS_ALL.filter(c=>c.mtime/1000>=start-60&&c.mtime/1000<=end+60)[0];
+  if(first)document.querySelector('[data-tab="terug"] #clipGallery').scrollIntoView({behavior:'smooth',block:'start'});
+}
+async function delTrip(id){
+  if(!confirm(tt('confirmDelTrip','Deze rit verwijderen?')))return;
+  await fetch('/trip_del?id='+encodeURIComponent(id));loadTrips();
+}
+['tripPerToday','tripPerWeek','tripPerAll'].forEach(id=>{$(id).onclick=()=>{
+  ['tripPerToday','tripPerWeek','tripPerAll'].forEach(b=>$(b).classList.remove('on'));$(id).classList.add('on');
+  TRIP_PERIOD=id==='tripPerToday'?'today':(id==='tripPerWeek'?'week':'all');TRIP_OPEN=null;renderTrips();};});
+$('tripHideShort').onchange=()=>{TRIP_HIDE_SHORT=$('tripHideShort').checked;
+  fetch('/ui/set?hide_short_trips='+(TRIP_HIDE_SHORT?1:0));renderTrips();};
+$('tripDelAll').onclick=async()=>{
+  if(!confirm(tt('confirmDelAllTrips','Alle ritten verwijderen? De rit die nu loopt blijft staan.')))return;
+  await fetch('/trips/delete_all');TRIP_OPEN=null;loadTrips();};
 let CLIPS_ALL=[],CLIP_FILTER='all',CLIP_SHOWN=50,CLIP_SEL=new Set();
 const CLIP_PAGE=50;
 function clipsFiltered(){if(CLIP_FILTER==='locked')return CLIPS_ALL.filter(c=>c.locked);
@@ -2926,6 +3105,7 @@ if __name__ == "__main__":
     load_rec_settings()
     load_ui_settings()
     load_lora_settings()
+    load_lora_state()
     load_wifi_settings()
     load_security_settings()
     threading.Thread(target=led_driver, daemon=True).start()
