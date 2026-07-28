@@ -221,7 +221,7 @@ def imu_latest(n=60):
 # ---- Eigen dashcam-recorder ----
 CLIPS_DIR = "/mnt/data/clips"
 REC_DEFAULT = {"on": False, "standalone": False, "seg": 60, "cap_gb": 15, "w": 1920, "h": 1080,
-               "fps": 30, "gain": 0, "shutter": 0, "gforce": 2.0, "rotation": 0}
+               "fps": 30, "gain": 0, "shutter": 0, "gforce": 2.0, "rotation": 0, "moment_gforce": 1.3}
 rec_cfg = dict(REC_DEFAULT)
 rec_state = {"proc": None, "err": "", "started": 0.0}
 UI_DEFAULT = {"lang": "en", "units": "kmh"}  # standaard Engels; NL/mph instelbaar in de UI
@@ -458,23 +458,127 @@ def retention_loop():
 def incident_loop():
     # G-sensor bewaakt schokken; boven de drempel wordt de lopende clip beschermd
     last_hit = 0.0
+    last_moment = 0.0
     while True:
         try:
             thr = float(rec_cfg.get("gforce", 0) or 0)
-            if thr > 0 and rec_cfg.get("on") and recorder_running():
+            mthr = float(rec_cfg.get("moment_gforce", 0) or 0)
+            if (thr > 0 or mthr > 0) and rec_cfg.get("on") and recorder_running():
                 d = imu_latest(25)
                 if d.get("ok"):
                     peak = d.get("peak_g", 1.0)
                     now = time.time()
-                    if abs(peak - 1.0) >= (thr - 1.0) and peak >= thr and now - last_hit > 5:
+                    if thr > 0 and abs(peak - 1.0) >= (thr - 1.0) and peak >= thr and now - last_hit > 5:
                         last_hit = now
                         clips = sorted(glob.glob(CLIPS_DIR + "/*.mp4"), key=lambda f: os.path.getmtime(f))
                         for c in clips[-2:]:  # lopende + vorige clip beschermen
                             if not clip_locked(c):
                                 lock_clip(c, "incident %.2fg" % peak)
+                    # "Momentje": lichter dan incident-lock, geen bescherming, alleen een tijdstip
+                    # noteren -- ook een volwaardig incident telt mee als moment.
+                    if mthr > 0 and abs(peak - 1.0) >= (mthr - 1.0) and peak >= mthr and now - last_moment > 3:
+                        last_moment = now
+                        trip_add_moment(now, peak)
         except Exception:
             pass
         time.sleep(1)
+
+
+# ---- Ritsamenvatting: 1 rit = 1 doorlopende opnamesessie (start_recorder tot stop/stroomverlies) ----
+TRIPS_DIR = "/mnt/data/trips"
+trip_state = {"id": None, "start": 0.0, "last_flush": 0.0, "distance_m": 0.0,
+              "max_speed_kmh": 0.0, "last_lat": None, "last_lon": None,
+              "moments": [], "zero_to_100": []}
+
+
+def _haversine_m(lat1, lon1, lat2, lon2):
+    r = 6371000.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(min(1.0, math.sqrt(a)))
+
+
+def trip_add_moment(t, g):
+    trip_state["moments"].append({"t": t, "g": round(g, 2)})
+    trip_state["moments"] = trip_state["moments"][-200:]  # niet onbeperkt laten groeien op een lange rit
+
+
+def _trip_path(trip_id):
+    return os.path.join(TRIPS_DIR, "%s.json" % trip_id)
+
+
+def _trip_write(finalized):
+    if not trip_state["id"]:
+        return
+    try:
+        os.makedirs(TRIPS_DIR, exist_ok=True)
+        out = {
+            "id": trip_state["id"], "start": trip_state["start"], "end": time.time(),
+            "finalized": finalized,
+            "distance_km": round(trip_state["distance_m"] / 1000.0, 2),
+            "max_speed_kmh": round(trip_state["max_speed_kmh"], 1),
+            "zero_to_100": trip_state["zero_to_100"],
+            "moments": trip_state["moments"],
+        }
+        with open(_trip_path(trip_state["id"]), "w") as f:
+            json.dump(out, f)
+    except Exception:
+        pass
+
+
+def trip_loop():
+    while True:
+        try:
+            active = rec_cfg.get("on") and recorder_running()
+            cur_id = time.strftime("%Y%m%d_%H%M%S", time.localtime(rec_state["started"])) if active else None
+            if active and trip_state["id"] != cur_id:
+                if trip_state["id"]:  # vorige rit was nog niet netjes afgesloten (bv. herstart) -> afronden
+                    _trip_write(finalized=True)
+                trip_state.update(id=cur_id, start=rec_state["started"], last_flush=0.0,
+                                   distance_m=0.0, max_speed_kmh=0.0, last_lat=None, last_lon=None,
+                                   moments=[], zero_to_100=[])
+            elif not active and trip_state["id"]:
+                _trip_write(finalized=True)
+                trip_state.update(id=None)
+
+            if active:
+                g = gnss_latest()
+                lat, lon = g.get("lat"), g.get("lon")
+                spd = (g.get("speed") or 0) * 3.6
+                if lat and lon:
+                    if trip_state["last_lat"] is not None:
+                        d = _haversine_m(trip_state["last_lat"], trip_state["last_lon"], lat, lon)
+                        if d < 200:  # sprong (geen/slechte fix) niet meetellen
+                            trip_state["distance_m"] += d
+                    trip_state["last_lat"], trip_state["last_lon"] = lat, lon
+                if spd > trip_state["max_speed_kmh"]:
+                    trip_state["max_speed_kmh"] = spd
+                if time.time() - trip_state["last_flush"] > 10:
+                    trip_state["last_flush"] = time.time()
+                    _trip_write(finalized=False)
+        except Exception:
+            pass
+        time.sleep(1)
+
+
+def zero_to_100_loop():
+    # Aparte, snelle poll (de gnss-tabel zelf ververst ~8x/s) specifiek om een 0-100 sprint
+    # nauwkeurig te timen -- de gewone 1x/s trip-tracking is daar te grof voor.
+    launch_t0 = None
+    while True:
+        try:
+            if rec_cfg.get("on") and recorder_running() and trip_state["id"]:
+                spd = (gnss_latest().get("speed") or 0) * 3.6
+                if spd < 3:
+                    launch_t0 = time.time()
+                elif launch_t0 is not None and spd >= 100:
+                    trip_state["zero_to_100"].append({"t": time.time(), "s": round(time.time() - launch_t0, 2)})
+                    launch_t0 = None
+        except Exception:
+            pass
+        time.sleep(0.15)
 
 
 def gnss_latest():
@@ -1812,7 +1916,8 @@ class H(BaseHTTPRequestHandler):
         if p == "/rec/set":
             q = parse_qs(urlparse(self.path).query)
             for k, cast in (("seg", int), ("cap_gb", int), ("w", int), ("h", int), ("fps", int),
-                            ("gain", int), ("shutter", int), ("gforce", float), ("rotation", int)):
+                            ("gain", int), ("shutter", int), ("gforce", float), ("rotation", int),
+                            ("moment_gforce", float)):
                 if k in q:
                     try:
                         v = cast(q[k][0])
@@ -1838,6 +1943,47 @@ class H(BaseHTTPRequestHandler):
                         ok = False
                 return self._send(200, "application/json", json.dumps({"ok": ok}))
             return self._send(400, "application/json", json.dumps({"ok": False}))
+        if p == "/trips.json":
+            out = []
+            files = sorted(glob.glob(TRIPS_DIR + "/*.json"), reverse=True)
+            for f in files[:100]:
+                try:
+                    t = json.load(open(f))
+                    out.append({
+                        "id": t["id"], "start": t["start"], "end": t["end"], "finalized": t.get("finalized", True),
+                        "distance_km": t.get("distance_km", 0), "max_speed_kmh": t.get("max_speed_kmh", 0),
+                        "zero_to_100_best": (min(z["s"] for z in t["zero_to_100"]) if t.get("zero_to_100") else None),
+                        "zero_to_100_count": len(t.get("zero_to_100", [])),
+                        "moments_count": len(t.get("moments", [])),
+                    })
+                except Exception:
+                    pass
+            if trip_state["id"] and not any(o["id"] == trip_state["id"] for o in out):
+                out.insert(0, {
+                    "id": trip_state["id"], "start": trip_state["start"], "end": time.time(), "finalized": False,
+                    "distance_km": round(trip_state["distance_m"] / 1000.0, 2),
+                    "max_speed_kmh": round(trip_state["max_speed_kmh"], 1),
+                    "zero_to_100_best": (min(z["s"] for z in trip_state["zero_to_100"]) if trip_state["zero_to_100"] else None),
+                    "zero_to_100_count": len(trip_state["zero_to_100"]),
+                    "moments_count": len(trip_state["moments"]),
+                })
+            return self._send(200, "application/json", json.dumps(out))
+        if p == "/trip":
+            q = parse_qs(urlparse(self.path).query)
+            tid = q.get("id", [""])[0]
+            if tid and re.match(r"^[0-9_]+$", tid):
+                if trip_state["id"] == tid:
+                    return self._send(200, "application/json", json.dumps({
+                        "id": tid, "start": trip_state["start"], "end": time.time(), "finalized": False,
+                        "distance_km": round(trip_state["distance_m"] / 1000.0, 2),
+                        "max_speed_kmh": round(trip_state["max_speed_kmh"], 1),
+                        "zero_to_100": trip_state["zero_to_100"], "moments": trip_state["moments"],
+                    }))
+                try:
+                    return self._send(200, "application/json", open(_trip_path(tid)).read())
+                except Exception:
+                    pass
+            return self._send(404, "application/json", json.dumps({"ok": False}))
         if p == "/clips.json":
             out = []
             for f in sorted(glob.glob(CLIPS_DIR + "/*.mp4"), key=lambda x: os.path.getmtime(x), reverse=True):
@@ -2098,6 +2244,10 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
     </div>
   </div>
 
+  <div class="card span2" data-tab="terug"><h2><span data-t="cTrips">Ritten</span></h2><div class="body">
+    <div id="tripsList"></div>
+  </div></div>
+
   <div class="card span2" data-tab="terug"><h2><span data-t="cClips">Video-opnames</span> <span id="clipCount" class="muted" style="font-weight:400"></span></h2><div class="body">
     <div id="clipPlayer" style="display:none;margin-bottom:12px">
       <video id="clipVideo" controls autoplay playsinline style="width:100%;max-height:52vh;background:#000;border-radius:8px;display:block"></video>
@@ -2141,7 +2291,10 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
       <div class="k" data-t="storeLimit">Bewaarlimiet</div><div class="v"><select class="ledsel" id="recCap" style="width:auto"><option value="5">5 GB</option><option value="10">10 GB</option><option value="15">15 GB</option><option value="20">20 GB</option></select></div>
       <div class="k" data-t="incLock">Incident-lock</div><div class="v"><select class="ledsel" id="recG" style="width:auto">
         <option value="0" data-t="off">Uit</option><option value="1.5" data-t="sensHigh">Gevoelig (1.5 g)</option><option value="2" data-t="sensMed">Normaal (2.0 g)</option><option value="3" data-t="sensLow">Ongevoelig (3.0 g)</option></select></div>
+      <div class="k" data-t="momentThresh">Momentje-markering</div><div class="v"><select class="ledsel" id="recMoment" style="width:auto">
+        <option value="0" data-t="off">Uit</option><option value="1.15" data-t="sensHigh">Gevoelig (1.15 g)</option><option value="1.3" data-t="sensMed">Normaal (1.3 g)</option><option value="1.6" data-t="sensLow">Ongevoelig (1.6 g)</option></select></div>
     </div>
+    <div class="muted" style="font-size:11px;margin-top:6px" data-t="momentNote">Lichter dan incident-lock: markeert alleen een tijdstip (scherpe bocht, stevig remmen) — beschermt niks, telt mee in de ritsamenvatting.</div>
     <div class="muted" style="font-size:11px;margin-top:10px" data-t="recNote">Standalone dashcam-modus: neemt op naar /mnt/data/clips (1080p30, hardware-H.264), oudste clips worden gewist boven de limiet, GPS + beweging meegelogd. "Camera uit" stopt de opname maar blijft standalone. Overleeft een reboot — werkt in de auto vanzelf zodra hij stroom krijgt.</div>
     <div class="muted" style="font-size:11px;margin-top:6px" data-t="lockNote">Incident-lock: bij een klap of noodstop boven de drempel wordt de clip beschermd 🔒 en nooit automatisch gewist.</div>
     <div style="margin-top:6px"><a id="recHive" style="font-size:11px;color:var(--mut);cursor:pointer" data-t="restoreHive">↩ Hivemapper-camera herstellen</a></div>
@@ -2303,6 +2456,8 @@ const I18N={nl:{},en:{
  cClips:'Recordings',cRecorder:'Recorder',btnStart:'Start recording',btnCamOff:'Camera off',
  status:'Status',segLen:'Segment length',storeLimit:'Storage limit',incLock:'Incident lock',quality:'Quality',
  rotation:'Rotation',rotation0:'0° (normal)',rotation180:'180° (upside down)',
+ momentThresh:'Moment marker',momentNote:'Lighter than incident-lock: just notes a timestamp (sharp corner, hard braking) — protects nothing, counts toward the trip summary.',
+ cTrips:'Trips',tripDist:'Distance',tripMaxSpeed:'Top speed',tripZeroHundred:'0-100',tripMoments:'Moments',tripNone:'No trips yet',tripInProgress:'in progress',
  off:'Off',sensHigh:'Sensitive (1.5 g)',sensMed:'Normal (2.0 g)',sensLow:'Low (3.0 g)',
  recNote:'Standalone dashcam mode: records to /mnt/data/clips (1080p30, hardware H.264), oldest clips are deleted past the limit, GPS + motion logged alongside. "Camera off" stops recording but stays standalone. Survives a reboot — in a car it just runs whenever it has power.',
  lockNote:'Incident lock: on an impact or hard stop above the threshold the clip is protected 🔒 and never auto-deleted.',
@@ -2577,7 +2732,7 @@ function showTab(tab){const leavingLive=(document.querySelector('.tabbtn.on')?.d
   document.querySelectorAll('.card').forEach(c=>c.classList.toggle('hidden',(c.dataset.tab||'live')!==tab));
   document.querySelectorAll('.tabbtn').forEach(b=>b.classList.toggle('on',b.dataset.tab===tab));
   if(leavingLive&&PREVIEW_ON)setPreview(false);
-  if(tab==='terug'){loadClips();}
+  if(tab==='terug'){loadClips();loadTrips();}
   if(tab==='settings'){loadRec();loadLedState();loadLora();loadWifi();}}
 document.querySelectorAll('.tabbtn').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 
@@ -2591,7 +2746,7 @@ async function loadRec(){try{const d=await jget('/rec/status');const run=d.runni
   $('recClips').textContent=d.clips+' '+tt('clips','clips')+' · '+fmtBytes(d.bytes)+(d.locked?'  ·  🔒 '+d.locked:'');
   $('recStart').className='ledbtn'+(run?' on':'');$('recStop').className='ledbtn'+(!run&&d.standalone?' on':'');
   if(d.err){$('recErr').style.display='block';$('recErr').textContent='⚠ '+d.err;}else{$('recErr').style.display='none';}
-  if($('recSeg').dataset.init!=='1'){$('recSeg').value=d.seg;$('recCap').value=d.cap_gb;$('recG').value=String(d.gforce??2);$('recQuality').value=d.w+'x'+d.h+'x'+d.fps;$('recRotation').value=String(d.rotation||0);$('recSeg').dataset.init='1';}
+  if($('recSeg').dataset.init!=='1'){$('recSeg').value=d.seg;$('recCap').value=d.cap_gb;$('recG').value=String(d.gforce??2);$('recMoment').value=String(d.moment_gforce??1.3);$('recQuality').value=d.w+'x'+d.h+'x'+d.fps;$('recRotation').value=String(d.rotation||0);$('recSeg').dataset.init='1';}
 }catch(e){}}
 $('recStart').onclick=async()=>{$('recStat').textContent=tt('freeing','camera vrijmaken…');await fetch('/rec/start');setTimeout(loadRec,8000);};
 $('recStop').onclick=async()=>{$('recStat').textContent=tt('stopping','opname stoppen…');await fetch('/rec/stop');setTimeout(loadRec,2500);};
@@ -2599,6 +2754,7 @@ $('recHive').onclick=async()=>{if(!confirm(tt('confirmHive','Hivemapper-camera h
 $('recSeg').onchange=()=>fetch('/rec/set?seg='+$('recSeg').value);
 $('recCap').onchange=()=>fetch('/rec/set?cap_gb='+$('recCap').value);
 $('recG').onchange=()=>fetch('/rec/set?gforce='+$('recG').value);
+$('recMoment').onchange=()=>fetch('/rec/set?moment_gforce='+$('recMoment').value);
 async function applyRecChangeAndRestart(qs){
   await fetch('/rec/set?'+qs);
   if(RECORDER_RUNNING){
@@ -2689,6 +2845,25 @@ function playClip(n,label){const v=$('clipVideo');v.pause();v.innerHTML='';v.rem
   $('clipPlayer').scrollIntoView({behavior:'smooth',block:'nearest'});}
 
 // ---- Terugkijken: filter, selectie, paginering, bulkacties ----
+async function loadTrips(){
+  try{
+    const trips=await jget('/trips.json');
+    const el=$('tripsList');
+    if(!trips.length){el.innerHTML='<div class="muted">'+tt('tripNone','Nog geen ritten')+'</div>';return;}
+    el.innerHTML=trips.map(t=>{
+      const dt=new Date(t.start*1000).toLocaleString('nl-NL',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+      const dur=fmtDur(t.end-t.start);
+      const zh=t.zero_to_100_best?t.zero_to_100_best.toFixed(2)+'s'+(t.zero_to_100_count>1?' ('+t.zero_to_100_count+'x)':''):'–';
+      return '<div class="kv" style="border-top:1px solid var(--bd);padding-top:8px;margin-top:8px">'
+        +'<div class="k">'+dt+(t.finalized?'':' · <span class="pill y" style="font-size:10px">'+tt('tripInProgress','bezig')+'</span>')+'</div><div class="v">'+dur+'</div>'
+        +'<div class="k">'+tt('tripDist','Afstand')+'</div><div class="v">'+t.distance_km+' km</div>'
+        +'<div class="k">'+tt('tripMaxSpeed','Topsnelheid')+'</div><div class="v">'+t.max_speed_kmh+' km/u</div>'
+        +'<div class="k">0-100</div><div class="v">'+zh+'</div>'
+        +'<div class="k">'+tt('tripMoments','Momentjes')+'</div><div class="v">'+t.moments_count+'</div>'
+        +'</div>';
+    }).join('');
+  }catch(e){}
+}
 let CLIPS_ALL=[],CLIP_FILTER='all',CLIP_SHOWN=50,CLIP_SEL=new Set();
 const CLIP_PAGE=50;
 function clipsFiltered(){if(CLIP_FILTER==='locked')return CLIPS_ALL.filter(c=>c.locked);
@@ -2756,6 +2931,8 @@ if __name__ == "__main__":
     threading.Thread(target=led_driver, daemon=True).start()
     threading.Thread(target=retention_loop, daemon=True).start()
     threading.Thread(target=incident_loop, daemon=True).start()
+    threading.Thread(target=trip_loop, daemon=True).start()
+    threading.Thread(target=zero_to_100_loop, daemon=True).start()
     threading.Thread(target=live_preview_loop, daemon=True).start()
     threading.Thread(target=track_loop, daemon=True).start()
     threading.Thread(target=srt_loop, daemon=True).start()
