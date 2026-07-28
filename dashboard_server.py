@@ -76,6 +76,20 @@ def sysinfo():
         d["cpu_mhz"] = round(int(read("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq", "0")) / 1000.0)
     except Exception:
         d["cpu_mhz"] = None
+    # Voedingsgezondheid. Let op: dit is GEEN spanningsmeting -- deze hardware heeft geen ADC
+    # en geen spanningssensor, dus de accuspanning van de auto is niet uit te lezen. Wat er wel
+    # is: de onderspanningsdetectie van de SoC. De bits van get_throttled: 0=nu te lage spanning,
+    # 1=nu gethrottled, 2=nu op lagere klok, 16..18=hetzelfde maar "sinds het opstarten gebeurd".
+    try:
+        thr = read("/sys/devices/platform/soc/soc:firmware/get_throttled", "").strip()
+        v = int(thr, 16) if thr.startswith("0x") else int(thr or 0)
+        d["power"] = {
+            "undervolt_now": bool(v & 0x1), "throttled_now": bool(v & 0x2),
+            "undervolt_ever": bool(v & 0x10000), "throttled_ever": bool(v & 0x40000),
+            "raw": v,
+        }
+    except Exception:
+        d["power"] = None
     # geheugen
     mem = {}
     for line in read("/proc/meminfo").splitlines():
@@ -2734,6 +2748,7 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
     <div id="cores" style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:8px 0 4px"></div>
     <div class="kv" style="margin-top:8px">
       <div class="k" data-t="cpuTemp">CPU-temp</div><div class="v" id="temp">–</div>
+      <div class="k" data-t="powerHealth">Voeding</div><div class="v" id="power">–</div>
       <div class="k" data-t="cpuClock">CPU-klok / gov.</div><div class="v" id="mhz">–</div>
       <div class="k">Load (1/5/15m)</div><div class="v mono" id="load">–</div>
       <div class="k" data-t="coresProcs">Cores / processen</div><div class="v" id="cpuproc">–</div>
@@ -2799,6 +2814,7 @@ const I18N={nl:{},en:{
  calOverlap:'The correct and wrong markers overlap — a threshold alone cannot separate them.',
  calGap:'They separate cleanly; a stricter setting would drop the wrong ones and keep the correct ones.',
  calMore:'Rate a few more to get a recommendation.',
+ powerHealth:'Power',pwOk:'stable',pwDipped:'ok · dipped earlier',pwLow:'undervoltage',
  off:'Off',sensHigh:'Sensitive (1.5 g)',sensMed:'Normal (2.0 g)',sensLow:'Low (3.0 g)',
  recNote:'Standalone dashcam mode: records to /mnt/data/clips (1080p30, hardware H.264), oldest clips are deleted past the limit, GPS + motion logged alongside. "Camera off" stops recording but stays standalone. Survives a reboot — in a car it just runs whenever it has power.',
  lockNote:'Incident lock: on an impact or hard stop above the threshold the clip is protected 🔒 and never auto-deleted.',
@@ -2961,6 +2977,12 @@ async function tickSys(){
     $('uptime').textContent=fmtDur(s.uptime_s);
     if(s.temp_c!=null){const t=tempU(s.temp_c);$('temp').textContent=$('temp2').textContent=t.v.toFixed(1)+' '+t.u;}else $('temp').textContent=$('temp2').textContent='–';
     $('mhz').textContent=(s.cpu_mhz?s.cpu_mhz+' MHz':'–')+(s.governor?' · '+s.governor:'');
+    const pw=$('power');
+    if(s.power){
+      if(s.power.undervolt_now)pw.innerHTML='<span class="pill r">'+tt('pwLow','te lage spanning')+'</span>';
+      else if(s.power.undervolt_ever)pw.innerHTML='<span class="pill y">'+tt('pwDipped','ok · eerder gedipt')+'</span>';
+      else pw.innerHTML='<span class="pill g">'+tt('pwOk','stabiel')+'</span>';
+    } else pw.textContent='–';
     // CPU-gebruik totaal + per core
     if(s.cpu){const all=s.cpu.cpu;if(all!=null){$('cpuAll').textContent=all+' %';$('cpuAllBar').style.width=all+'%';$('cpuAllWrap').className='bar'+(all>85?' hot':'');}
       const cores=Object.keys(s.cpu).filter(k=>k!=='cpu').sort();
