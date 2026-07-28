@@ -833,9 +833,34 @@ def gnss_latest():
     return {}
 
 
+# Er zit geen batterijklok in dit toestel: elke boot begint op de bouwdatum van de firmware
+# (20-12-2022) tot de GPS een fix heeft. Daardoor krijgen de eerste minuten van elke rit een
+# verkeerde tijd, en -- belangrijker -- kan de GPS-module haar assistentiedata niet gebruiken,
+# want die wordt per DAG geselecteerd. Daarom onthouden we de laatst bekende tijd zelf.
+CLOCK_FILE = "/mnt/data/lastclock"
+CLOCK_SANE_YEAR = 2024
+
+
+def clock_is_sane():
+    return time.gmtime().tm_year >= CLOCK_SANE_YEAR
+
+
+def clock_restore():
+    # Alleen ingrijpen als de klok overduidelijk nergens op slaat; nooit een goede tijd overschrijven.
+    if clock_is_sane():
+        return
+    try:
+        saved = float(open(CLOCK_FILE).read().strip())
+    except Exception:
+        return
+    if saved > time.time():
+        sh('date -u -s "%s" 2>/dev/null' % time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(saved)))
+
+
 def gps_time_sync():
     # zet de systeemklok uit de GPS-tijd (u-blox UTC) zodra er een geldige fix is; houdt 'm gelijk
     synced = False
+    last_saved = 0.0
     while True:
         try:
             g = gnss_latest()
@@ -847,6 +872,13 @@ def gps_time_sync():
                     if abs(gps_epoch - time.time()) > 3:
                         sh('date -u -s "%s" 2>/dev/null' % ts)
                         synced = True
+            # De stroom valt zonder waarschuwing weg, dus regelmatig wegschrijven -- bij de
+            # volgende start zijn we dan hooguit dit interval plus de stilstand kwijt.
+            now = time.time()
+            if clock_is_sane() and now - last_saved > 60:
+                last_saved = now
+                with open(CLOCK_FILE, "w") as f:
+                    f.write("%d" % now)
         except Exception:
             pass
         time.sleep(15 if not synced else 120)
@@ -3522,6 +3554,7 @@ setInterval(tickImu,200);setInterval(loadRec,5000);
 
 
 if __name__ == "__main__":
+    clock_restore()  # als eerste: alles hieronder gebruikt tijdstempels
     load_led_settings()
     load_rec_settings()
     load_ui_settings()
