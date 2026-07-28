@@ -1,5 +1,7 @@
 # Roamcam
 
+> 🧪 **You're on the `beta` branch.** Same dashboard as `master`, plus in-progress experiments (currently: LoRa/TTN connectivity) that aren't finished or wired in yet. Just want the stable, tested version? Use [`master`](https://github.com/Menno000/Roamcam/tree/master) instead.
+
 [![License](https://img.shields.io/github/license/Menno000/Roamcam)](LICENSE)
 [![Sponsor](https://img.shields.io/badge/%E2%9D%A4-Sponsor-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Menno000)
 
@@ -148,7 +150,7 @@ This is a hobby project shared as-is. A few honest notes:
 Feasibility researched, nothing built yet — see the write-ups linked below before assuming either of these is simple:
 
 - **Self-update mechanism** — a "check for updates" button, blocked on the device usually having no internet by design; groundwork in [docs/HOWTO.md](docs/HOWTO.md#toward-a-self-update-mechanism-not-built-yet--the-groundwork)
-- **LoRa connectivity, backend of your choice** — the HDC has an unused LoRa radio; could carry incident alerts or a position beacon with no Wi-Fi in range. Several very different networks could carry that (your own Meshtastic/MeshCore mesh, free community networks like The Things Network, a self-hosted gateway, or a commercial telco) — the plan is to let the owner pick, not bake in one; full comparison in [docs/HOWTO.md](docs/HOWTO.md#toward-lora-mesh-networking-not-built-yet--the-groundwork)
+- **LoRa connectivity, backend of your choice** — the HDC has an unused LoRa radio; could carry incident alerts or a position beacon with no Wi-Fi in range. Several very different networks could carry that (your own Meshtastic/MeshCore mesh, free community networks like The Things Network, a self-hosted gateway, or a commercial telco) — the plan is to let the owner pick, not bake in one; full comparison in [docs/HOWTO.md](docs/HOWTO.md#toward-lora-mesh-networking-not-built-yet--the-groundwork). 🧪 **Currently field-testing** a from-scratch LoRaWAN/TTN join on this branch — see [experiments/lora-ttn](experiments/lora-ttn/) — not yet confirmed working end-to-end, not wired into the dashboard.
 
 ### 💭 Future ideas
 
