@@ -1336,6 +1336,164 @@ def lora_loop():
             time.sleep(5)
 
 
+# ---- Thuisnetwerk (STA-modus) -- wisselt met de eigen AP, kan hardware-matig niet tegelijk.
+# Alleen geprobeerd bij het opstarten (niet doorlopend, anders knippert de AP telkens weg voor
+# iedereen die er direct op zit). Lukt het niet: gewoon de vertrouwde AP, de rest van deze sessie.
+WIFI_DEFAULT = {"home_ssid": "", "home_psk": "", "ap_psk": ""}
+wifi_cfg = dict(WIFI_DEFAULT)
+wifi_state = {"mode": "ap", "home_ip": "", "last_error": "", "tried_boot": False}
+WPA_CONF_PATH = "/tmp/roamcam_wpa.conf"
+WIFI_BOOT_TIMEOUT_S = 25
+
+
+def load_wifi_settings():
+    try:
+        d = json.load(open(LED_SETTINGS_PATH))
+        if isinstance(d.get("wifi"), dict):
+            for k in WIFI_DEFAULT:
+                if k in d["wifi"]:
+                    wifi_cfg[k] = d["wifi"][k]
+    except Exception:
+        pass
+
+
+def save_wifi_settings():
+    try:
+        d = {}
+        try:
+            d = json.load(open(LED_SETTINGS_PATH))
+        except Exception:
+            pass
+        d["wifi"] = dict(wifi_cfg)
+        with open(LED_SETTINGS_PATH, "w") as f:
+            json.dump(d, f)
+    except Exception:
+        pass
+
+
+def _wifi_ap_up():
+    sh("systemctl start hostapd 2>/dev/null")
+    wifi_state["mode"] = "ap"
+    wifi_state["home_ip"] = ""
+
+
+def _wifi_home_ip():
+    ip = read("/tmp/roamcam_sta.ip")
+    return ip if ip else ""
+
+
+def wifi_try_home_once():
+    # Éénmalige, tijdgebonden poging -- met een garandeerde terugval naar de AP, wat er ook gebeurt.
+    if not (wifi_cfg.get("home_ssid") and wifi_cfg.get("home_psk")):
+        return
+    try:
+        sh("systemctl stop hostapd 2>/dev/null")
+        sh("pkill -f roamcam_wpa.conf 2>/dev/null; pkill udhcpc 2>/dev/null")
+        time.sleep(1)
+        conf = ('ctrl_interface=/var/run/wpa_supplicant\nnetwork={\n  ssid="%s"\n  psk="%s"\n}\n'
+                % (wifi_cfg["home_ssid"].replace('"', ""), wifi_cfg["home_psk"].replace('"', "")))
+        with open(WPA_CONF_PATH, "w") as f:
+            f.write(conf)
+        sh("wpa_supplicant -B -i wlan0 -c %s 2>/mnt/data/wifi_sta.log" % WPA_CONF_PATH)
+        t0 = time.time()
+        connected = False
+        while time.time() - t0 < WIFI_BOOT_TIMEOUT_S:
+            st = sh("wpa_cli -i wlan0 status 2>/dev/null")
+            if "wpa_state=COMPLETED" in st:
+                connected = True
+                break
+            time.sleep(1)
+        if not connected:
+            wifi_state["last_error"] = "kon niet verbinden (SSID niet in bereik of verkeerd wachtwoord)"
+            raise RuntimeError("sta join failed")
+        sh("rm -f /tmp/roamcam_sta.ip")
+        sh("udhcpc -i wlan0 -n -q -s /bin/true 2>/mnt/data/wifi_dhcp.log && "
+           "ip -4 -o addr show wlan0 | awk '{print $4}' | cut -d/ -f1 > /tmp/roamcam_sta.ip")
+        time.sleep(1)
+        ip = _wifi_home_ip()
+        if not ip:
+            wifi_state["last_error"] = "verbonden maar geen IP gekregen (DHCP)"
+            raise RuntimeError("dhcp failed")
+        wifi_state["mode"] = "home"
+        wifi_state["home_ip"] = ip
+        wifi_state["last_error"] = ""
+    except Exception as e:
+        if not wifi_state.get("last_error"):
+            wifi_state["last_error"] = str(e)
+        sh("pkill -f roamcam_wpa.conf 2>/dev/null; pkill udhcpc 2>/dev/null")
+        _wifi_ap_up()
+
+
+def wifi_loop():
+    # Alleen bij opstarten proberen; daarna passief bewaken of de thuisverbinding nog leeft.
+    time.sleep(8)  # even wachten tot het systeem verder gebooot is
+    if not wifi_state["tried_boot"]:
+        wifi_state["tried_boot"] = True
+        wifi_try_home_once()
+    while True:
+        try:
+            if wifi_state["mode"] == "home":
+                st = sh("wpa_cli -i wlan0 status 2>/dev/null")
+                if "wpa_state=COMPLETED" not in st:
+                    wifi_state["last_error"] = "thuisnetwerk kwijtgeraakt, terug naar eigen AP"
+                    sh("pkill -f roamcam_wpa.conf 2>/dev/null; pkill udhcpc 2>/dev/null")
+                    _wifi_ap_up()
+        except Exception:
+            pass
+        time.sleep(15)
+
+
+def wifi_set_ap_password(new_psk):
+    # Verandert het AP-wachtwoord voor de huidige sessie. /etc staat op de RAM-overlay,
+    # dus dit overleeft nog GEEN reboot (valt dan terug op het stock-wachtwoord) --
+    # bewuste, gedocumenteerde beperking, geen bug.
+    try:
+        conf = read("/etc/hostapd.conf")
+        if "wpa_passphrase=" in conf:
+            conf = re.sub(r"wpa_passphrase=.*", "wpa_passphrase=" + new_psk, conf)
+        else:
+            conf += "\nwpa_passphrase=%s\n" % new_psk
+        with open("/etc/hostapd.conf", "w") as f:
+            f.write(conf)
+        sh("systemctl restart hostapd 2>/dev/null")
+        return True
+    except Exception:
+        return False
+
+
+# ---- Simpele beveiliging (HTTP Basic Auth) -- uit tenzij je zelf een wachtwoord instelt ----
+import hashlib, hmac, base64
+SECURITY_DEFAULT = {"dash_pw_hash": ""}
+security_cfg = dict(SECURITY_DEFAULT)
+
+
+def hash_dash_password(pw):
+    return hashlib.sha256(("roamcam:" + pw).encode()).hexdigest()
+
+
+def load_security_settings():
+    try:
+        d = json.load(open(LED_SETTINGS_PATH))
+        if isinstance(d.get("security"), dict) and "dash_pw_hash" in d["security"]:
+            security_cfg["dash_pw_hash"] = d["security"]["dash_pw_hash"]
+    except Exception:
+        pass
+
+
+def save_security_settings():
+    try:
+        d = {}
+        try:
+            d = json.load(open(LED_SETTINGS_PATH))
+        except Exception:
+            pass
+        d["security"] = dict(security_cfg)
+        with open(LED_SETTINGS_PATH, "w") as f:
+            json.dump(d, f)
+    except Exception:
+        pass
+
+
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -1353,7 +1511,26 @@ class H(BaseHTTPRequestHandler):
         except Exception:
             pass
 
+    def _check_auth(self):
+        if not security_cfg.get("dash_pw_hash"):
+            return True
+        hdr = self.headers.get("Authorization", "")
+        if not hdr.startswith("Basic "):
+            return False
+        try:
+            user_pw = base64.b64decode(hdr[6:]).decode()
+            pw = user_pw.split(":", 1)[1] if ":" in user_pw else ""
+        except Exception:
+            return False
+        return hmac.compare_digest(hash_dash_password(pw), security_cfg["dash_pw_hash"])
+
     def do_GET(self):
+        if not self._check_auth():
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Basic realm="Roamcam"')
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         p = self.path.split("?")[0]
         if p == "/" or p == "/index.html":
             return self._send(200, "text/html; charset=utf-8", PAGE)
@@ -1462,6 +1639,32 @@ class H(BaseHTTPRequestHandler):
                 if len(v) == 32:
                     lora_cfg["appkey"] = v.lower()
             save_lora_settings()
+            return self._send(200, "application/json", json.dumps({"ok": True}))
+        if p == "/wifi/status":
+            out = dict(wifi_state)
+            out["home_ssid"] = wifi_cfg.get("home_ssid", "")
+            out["ap_ssid"] = read("/mnt/data/wifi.cfg").split(",")[0] if os.path.exists("/mnt/data/wifi.cfg") else ""
+            out["dash_pw_set"] = bool(security_cfg.get("dash_pw_hash"))
+            return self._send(200, "application/json", json.dumps(out))
+        if p == "/wifi/set":
+            q = parse_qs(urlparse(self.path).query)
+            if "home_ssid" in q:
+                wifi_cfg["home_ssid"] = q["home_ssid"][0][:64]
+            if "home_psk" in q and q["home_psk"][0]:
+                wifi_cfg["home_psk"] = q["home_psk"][0][:64]
+            save_wifi_settings()
+            if "ap_psk" in q and q["ap_psk"][0]:
+                wifi_set_ap_password(q["ap_psk"][0])
+            return self._send(200, "application/json", json.dumps({"ok": True}))
+        if p == "/wifi/retry":
+            threading.Thread(target=wifi_try_home_once, daemon=True).start()
+            return self._send(200, "application/json", json.dumps({"ok": True}))
+        if p == "/security/set":
+            q = parse_qs(urlparse(self.path).query)
+            if "password" in q:
+                pw = q["password"][0]
+                security_cfg["dash_pw_hash"] = hash_dash_password(pw) if pw else ""
+                save_security_settings()
             return self._send(200, "application/json", json.dumps({"ok": True}))
         if p == "/rec/status":
             files = glob.glob(CLIPS_DIR + "/*.mp4")
@@ -1879,6 +2082,28 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
     <div class="muted" style="font-size:11px;margin-top:8px" data-t="loraGenNote">Experimenteel. Pauzeert de stock LoRa/Helium-service zolang een van beide aan staat — komt vanzelf terug zodra je "Uit" kiest.</div>
   </div></div>
 
+  <div class="card" data-tab="settings"><h2><span data-t="cWifi">Thuisnetwerk</span> <span id="wifiPill" class="pill b">–</span></h2><div class="body">
+    <div class="kv">
+      <div class="k" data-t="wifiHomeSsid">Thuis-wifi naam</div><div class="v"><input class="mono" id="wifiHomeSsid" style="width:100%;background:transparent;color:inherit;border:1px solid var(--bd);border-radius:6px;padding:4px 6px;font-size:12px"></div>
+      <div class="k" data-t="wifiHomePsk">Thuis-wifi wachtwoord</div><div class="v"><input type="password" class="mono" id="wifiHomePsk" style="width:100%;background:transparent;color:inherit;border:1px solid var(--bd);border-radius:6px;padding:4px 6px;font-size:12px"></div>
+      <div class="k" data-t="status">Status</div><div class="v" id="wifiStatus">–</div>
+      <div class="k" data-t="wifiApPsk">Nieuw AP-wachtwoord</div><div class="v"><input type="password" class="mono" id="wifiApPsk" placeholder="leeg = niet wijzigen" style="width:100%;background:transparent;color:inherit;border:1px solid var(--bd);border-radius:6px;padding:4px 6px;font-size:12px"></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="ledbtn" id="wifiSave" data-t="loraSaveBtn">Opslaan</button>
+      <button class="ledbtn" id="wifiRetry" data-t="wifiRetryBtn">Nu proberen</button>
+    </div>
+    <div class="muted" style="font-size:11px;margin-top:8px" data-t="wifiNote">Probeert alleen bij het opstarten thuis-wifi te pakken (niet doorlopend, anders valt de eigen AP telkens weg). Lukt dat, dan blijft hij daarop tot je uit bereik rijdt — dan valt hij vanzelf terug op de eigen AP. AP-wachtwoord wijzigen breekt je huidige AP-verbinding meteen als je daarop zit, en overleeft nog geen reboot.</div>
+  </div></div>
+
+  <div class="card" data-tab="settings"><h2 data-t="cSecurity">Dashboard-wachtwoord</h2><div class="body">
+    <div class="kv">
+      <div class="k" data-t="wifiDashPw">Nieuw wachtwoord</div><div class="v"><input type="password" class="mono" id="secPw" placeholder="leeg = geen wachtwoord" style="width:100%;background:transparent;color:inherit;border:1px solid var(--bd);border-radius:6px;padding:4px 6px;font-size:12px"></div>
+    </div>
+    <button class="ledbtn" id="secSave" style="margin-top:10px" data-t="loraSaveBtn">Opslaan</button>
+    <div class="muted" style="font-size:11px;margin-top:8px" data-t="secNote">Aan te raden zodra je "Thuisnetwerk" gebruikt — dan is het dashboard ineens bereikbaar voor iedereen op dat netwerk, niet alleen wie het AP-wachtwoord kent.</div>
+  </div></div>
+
   <div class="card" data-tab="live"><h2>GPS / GNSS <span id="fixPill" class="pill b">–</span></h2><div class="body">
     <div class="kv">
       <div class="k">Latitude</div><div class="v mono" id="lat">–</div>
@@ -2001,7 +2226,13 @@ const I18N={nl:{},en:{
  loraNote:'Sends a small GPS position beacon over The Things Network (LoRaWAN OTAA). Needs a free account at console.cloud.thethings.network — get the DevEUI/AppKey there.',
  loraMeshNote:'Runs meshtasticd on this camera as a mesh node. Connect the free Meshtastic app (Android/iOS) via "TCP" to this device on port 4403. Needs meshtasticd manually installed on the device first — see docs/HOWTO.md.',
  loraMeshMissing:'meshtasticd not found on this device — not (manually) installed yet.',
- loraGenNote:'Experimental. Pauses the stock LoRa/Helium service while either of these is on — comes back automatically once you pick "Off".'
+ loraGenNote:'Experimental. Pauses the stock LoRa/Helium service while either of these is on — comes back automatically once you pick "Off".',
+ cWifi:'Home network',wifiHomeSsid:'Home Wi-Fi name',wifiHomePsk:'Home Wi-Fi password',wifiApPsk:'New AP password',
+ wifiRetryBtn:'Try now',wifiOnHome:'on home network',wifiOnAp:'on own AP',
+ wifiNote:'Only tries the home network at startup (not continuously, or the AP would keep flickering off for anyone on it directly). If it works, it stays there until you drive out of range — then falls back to the AP automatically. Changing the AP password disconnects you immediately if you’re on it, and doesn’t survive a reboot yet.',
+ cSecurity:'Dashboard password',wifiDashPw:'New password',
+ secNote:'Worth setting once you use "Home network" — the dashboard suddenly becomes reachable by anyone on that network, not just people who know the AP password.',
+ secSaved:'Saved. The browser will ask you to log in on the next visit if a password is set.'
 }};
 let LANG='nl',UNITS='kmh';
 const T=k=>(LANG==='en'&&I18N.en[k])?I18N.en[k]:null;
@@ -2233,7 +2464,7 @@ function showTab(tab){const leavingLive=(document.querySelector('.tabbtn.on')?.d
   document.querySelectorAll('.tabbtn').forEach(b=>b.classList.toggle('on',b.dataset.tab===tab));
   if(leavingLive&&PREVIEW_ON)setPreview(false);
   if(tab==='terug'){loadClips();}
-  if(tab==='settings'){loadRec();loadLedState();loadLora();}}
+  if(tab==='settings'){loadRec();loadLedState();loadLora();loadWifi();}}
 document.querySelectorAll('.tabbtn').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 
 // ---- Recorder ----
@@ -2282,6 +2513,28 @@ $('loraSave').onclick=async()=>{
   setTimeout(loadLora,500);
 };
 setInterval(()=>{if(document.querySelector('.tabbtn[data-tab="settings"]').classList.contains('on'))loadLora();},4000);
+
+// ---- Thuisnetwerk + dashboard-wachtwoord ----
+let WIFI_LOADED_ONCE=false;
+async function loadWifi(){try{const d=await jget('/wifi/status');
+  const home=d.mode==='home';
+  $('wifiStatus').textContent=home?(tt('wifiOnHome','op thuisnetwerk')+' · '+d.home_ip):(tt('wifiOnAp','op eigen AP')+(d.last_error?' — '+d.last_error:''));
+  $('wifiPill').textContent=home?tt('wifiOnHome','thuis'):tt('wifiOnAp','AP');
+  $('wifiPill').className='pill '+(home?'g':'b');
+  if(!WIFI_LOADED_ONCE){$('wifiHomeSsid').value=d.home_ssid||'';WIFI_LOADED_ONCE=true;}
+}catch(e){}}
+$('wifiSave').onclick=async()=>{
+  const params=new URLSearchParams();
+  if($('wifiHomeSsid').value.trim())params.set('home_ssid',$('wifiHomeSsid').value.trim());
+  if($('wifiHomePsk').value)params.set('home_psk',$('wifiHomePsk').value);
+  if($('wifiApPsk').value)params.set('ap_psk',$('wifiApPsk').value);
+  await fetch('/wifi/set?'+params.toString());
+  $('wifiHomePsk').value='';$('wifiApPsk').value='';
+  setTimeout(loadWifi,500);
+};
+$('wifiRetry').onclick=async()=>{$('wifiStatus').textContent=tt('freeing','bezig…');await fetch('/wifi/retry');setTimeout(loadWifi,3000);};
+$('secSave').onclick=async()=>{await fetch('/security/set?password='+encodeURIComponent($('secPw').value));$('secPw').value='';alert(tt('secSaved','Opgeslagen. Bij het volgende bezoek vraagt de browser om in te loggen als er een wachtwoord is ingesteld.'));};
+setInterval(()=>{if(document.querySelector('.tabbtn[data-tab="settings"]').classList.contains('on'))loadWifi();},5000);
 
 // ---- Voorkeuren (taal + eenheden) ----
 async function loadPrefs(){try{const d=await jget('/ui/get');LANG=d.lang||'en';UNITS=d.units||'kmh';
@@ -2364,6 +2617,8 @@ if __name__ == "__main__":
     load_rec_settings()
     load_ui_settings()
     load_lora_settings()
+    load_wifi_settings()
+    load_security_settings()
     threading.Thread(target=led_driver, daemon=True).start()
     threading.Thread(target=retention_loop, daemon=True).start()
     threading.Thread(target=incident_loop, daemon=True).start()
@@ -2372,6 +2627,7 @@ if __name__ == "__main__":
     threading.Thread(target=srt_loop, daemon=True).start()
     threading.Thread(target=gps_time_sync, daemon=True).start()
     threading.Thread(target=lora_loop, daemon=True).start()
+    threading.Thread(target=wifi_loop, daemon=True).start()
     # standalone-modus + recorder hervatten na reboot
     if rec_cfg.get("standalone"):
         try:
