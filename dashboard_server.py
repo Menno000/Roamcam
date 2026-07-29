@@ -800,15 +800,29 @@ def zero_to_100_loop():
     # Aparte, snelle poll (de gnss-tabel zelf ververst ~8x/s) specifiek om een 0-100 sprint
     # nauwkeurig te timen -- de gewone 1x/s trip-tracking is daar te grof voor.
     launch_t0 = None
+    seen_mid = False
     while True:
         try:
             if rec_cfg.get("on") and recorder_running() and trip_state["id"]:
-                spd = (gnss_latest().get("speed") or 0) * 3.6
-                if spd < 3:
-                    launch_t0 = time.time()
-                elif launch_t0 is not None and spd >= 100:
-                    trip_state["zero_to_100"].append({"t": time.time(), "s": round(time.time() - launch_t0, 2)})
-                    launch_t0 = None
+                g = gnss_latest()
+                # Zonder fix meldt de module een blijvende 0 en daarna ineens onzin. Dat gaf
+                # echte "sprints" van 0,15 s -- precies één meetinterval. Alleen meten met fix.
+                if g.get("fix") not in ("2D", "3D"):
+                    launch_t0, seen_mid = None, False
+                else:
+                    spd = (g.get("speed") or 0) * 3.6
+                    if spd < 5:
+                        launch_t0, seen_mid = time.time(), False
+                    elif launch_t0 is not None:
+                        if 40 <= spd <= 80:
+                            seen_mid = True  # bewijs dat we er echt doorheen zijn versneld
+                        elif spd >= 100:
+                            el = time.time() - launch_t0
+                            # een sprong zonder tussenliggende snelheden, of onder de 3 s,
+                            # is een meetfout en geen sprint
+                            if seen_mid and el >= 3.0:
+                                trip_state["zero_to_100"].append({"t": time.time(), "s": round(el, 2)})
+                            launch_t0, seen_mid = None, False
         except Exception:
             pass
         time.sleep(0.15)
