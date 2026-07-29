@@ -2201,6 +2201,7 @@ class H(BaseHTTPRequestHandler):
             out["backend_wanted"] = lora_cfg.get("backend", "off")
             out["configured"] = bool(lora_cfg.get("deveui") and lora_cfg.get("appkey"))
             out["deveui"] = lora_cfg.get("deveui", "")
+            out["joineui"] = lora_cfg.get("joineui", "")
             out["available"] = gpiod is not None
             out["meshtastic_installed"] = meshtasticd_installed()
             return self._send(200, "application/json", json.dumps(out))
@@ -2218,7 +2219,9 @@ class H(BaseHTTPRequestHandler):
                 save_lora_state()
                 return self._send(200, "application/json", json.dumps({"ok": False, "error": str(e)}))
         if p == "/lora/set":
-            q = parse_qs(urlparse(self.path).query)
+            # keep_blank_values: anders negeert parse_qs een leeg veld en kun je een ingevulde
+            # JoinEUI nooit meer weghalen. Dezelfde valkuil kostte ons eerder de wifi-instelling.
+            q = parse_qs(urlparse(self.path).query, keep_blank_values=True)
             if "backend" in q and q["backend"][0] in ("off", "ttn", "meshtastic"):
                 lora_cfg["backend"] = q["backend"][0]
             if "deveui" in q:
@@ -2229,6 +2232,14 @@ class H(BaseHTTPRequestHandler):
                 v = re.sub(r"[^0-9a-fA-F]", "", q["appkey"][0])
                 if len(v) == 32:
                     lora_cfg["appkey"] = v.lower()
+            if "joineui" in q:
+                # TTN accepteert alle nullen, maar KPN geeft een eigen JoinEUI uit waarmee de
+                # join naar hun join-server wordt gerouteerd. Leeg = terug naar nullen.
+                v = re.sub(r"[^0-9a-fA-F]", "", q["joineui"][0])
+                if len(v) == 16:
+                    lora_cfg["joineui"] = v.lower()
+                elif not v:
+                    lora_cfg["joineui"] = "0000000000000000"
             save_lora_settings()
             return self._send(200, "application/json", json.dumps({"ok": True}))
         if p == "/wifi/status":
@@ -2945,15 +2956,17 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
   <div class="card" data-tab="settings"><h2><span data-t="cLora">LoRa (experimenteel)</span> <span id="loraPill" class="pill b">–</span></h2><div class="body">
     <div class="ledrow"><label data-t="loraBackend">Netwerk</label><select class="ledsel" id="loraBackend">
       <option value="off" data-t="off">Uit</option>
-      <option value="ttn">The Things Network</option>
+      <option value="ttn">LoRaWAN (TTN / KPN / eigen)</option>
       <option value="meshtastic">Meshtastic</option>
     </select></div>
     <div id="loraTtnFields">
       <div class="kv" style="margin-top:8px">
         <div class="k">DevEUI</div><div class="v"><input class="mono" id="loraDevEui" placeholder="70b3d57ed00788c9" style="width:100%;background:transparent;color:inherit;border:1px solid var(--bd);border-radius:6px;padding:4px 6px;font-size:12px"></div>
         <div class="k">AppKey</div><div class="v"><input class="mono" id="loraAppKey" placeholder="32 hex tekens" style="width:100%;background:transparent;color:inherit;border:1px solid var(--bd);border-radius:6px;padding:4px 6px;font-size:12px"></div>
+        <div class="k">JoinEUI</div><div class="v"><input class="mono" id="loraJoinEui" placeholder="0000000000000000" style="width:100%;background:transparent;color:inherit;border:1px solid var(--bd);border-radius:6px;padding:4px 6px;font-size:12px"></div>
       </div>
-      <div class="muted" style="font-size:11px;margin-top:8px" data-t="loraNote">Stuurt een klein GPS-positiebakentje via The Things Network (LoRaWAN OTAA). Vereist een gratis account op console.cloud.thethings.network. DevEUI/AppKey haal je daar op.</div>
+      <div class="muted" style="font-size:11px;margin-top:8px" data-t="loraNote">Stuurt een klein GPS-positiebakentje via een LoRaWAN-netwerk (OTAA). Werkt met elk netwerk: The Things Network (gratis account) of KPN Things. De drie sleutels krijg je van het netwerk waar je het toestel aanmeldt.</div>
+      <div class="muted" style="font-size:11px;margin-top:4px" data-t="loraJoinNote">JoinEUI bepaalt naar welk netwerk de aanmelding gaat. TTN accepteert alle nullen; KPN geeft er zelf een uit — die moet je dan hier invullen.</div>
     </div>
     <div id="loraMeshFields" style="display:none">
       <div class="muted" style="font-size:11px;margin-top:8px" data-t="loraMeshNote">Draait meshtasticd op deze camera als een mesh-node. Verbind de gratis Meshtastic-app (Android/iOS) via "TCP" met dit toestel op poort 4403. Vereist dat meshtasticd handmatig op het toestel is geïnstalleerd — zie docs/HOWTO.md.</div>
@@ -3489,7 +3502,8 @@ async function loadLora(){try{const d=await jget('/lora/status');
   $('loraAttempts').textContent=(d.attempts||0)+(d.uplinks?' ('+d.uplinks+' verzonden)':'');
   $('loraLastError').textContent=d.last_error||'–';
   $('loraMeshMissing').style.display=(d.backend_wanted==='meshtastic'&&!d.meshtastic_installed)?'block':'none';
-  if(!LORA_LOADED_ONCE){$('loraBackend').value=d.backend_wanted||'off';$('loraDevEui').value=d.deveui||'';loraShowFields();LORA_LOADED_ONCE=true;}
+  if(!LORA_LOADED_ONCE){$('loraBackend').value=d.backend_wanted||'off';$('loraDevEui').value=d.deveui||'';
+    $('loraJoinEui').value=(d.joineui&&d.joineui!=='0000000000000000')?d.joineui:'';loraShowFields();LORA_LOADED_ONCE=true;}
 }catch(e){}}
 $('loraSave').onclick=async()=>{
   const b=$('loraBackend').value;
@@ -3497,7 +3511,8 @@ $('loraSave').onclick=async()=>{
   params.set('backend',b);
   if($('loraDevEui').value.trim())params.set('deveui',$('loraDevEui').value.trim());
   if($('loraAppKey').value.trim())params.set('appkey',$('loraAppKey').value.trim());
-  const names={off:tt('off','Uit'),ttn:'The Things Network',meshtastic:'Meshtastic'};
+  params.set('joineui',$('loraJoinEui').value.trim());
+  const names={off:tt('off','Uit'),ttn:'LoRaWAN',meshtastic:'Meshtastic'};
   // De backend schakelt op de achtergrond om en dat duurt seconden; daarom bevestigt de knop
   // meteen dát het aankwam, en volgt het echte resultaat daarna vanzelf in de statusregel.
   if(await saveWith('/lora/set?'+params.toString(),tt('loraSaved','Opgeslagen')+': '+names[b])){
