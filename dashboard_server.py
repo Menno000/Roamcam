@@ -248,7 +248,20 @@ MOMENT_ALPHA = 0.02      # trage EWMA op 1 Hz -> ~50 s geheugen; een enkele piek
 MOMENT_DEBOUNCE = 10.0
 rec_cfg = dict(REC_DEFAULT)
 rec_state = {"proc": None, "err": "", "started": 0.0}
-UI_DEFAULT = {"lang": "en", "units": "kmh", "hide_short_trips": True}  # standaard Engels; NL/mph instelbaar in de UI
+UI_DEFAULT = {"lang": "en", "units": "kmh", "hide_short_trips": True, "tz": "UTC"}
+
+
+def apply_tz():
+    # Het toestel staat af-fabriek op UTC, dus alles wat het zelf schrijft (clipnamen, ritnamen,
+    # de tijd in de GPS-ondertitels) liep in de zomer twee uur achter op de klok in de auto.
+    # Via de TZ-variabele erven ook libcamera/ffmpeg dit, zodat bestandsnamen meteen kloppen.
+    # /etc staat op een RAM-overlay en is na een herstart weer leeg, vandaar bij elke start.
+    tz = ui_cfg.get("tz") or "UTC"
+    os.environ["TZ"] = tz
+    try:
+        time.tzset()
+    except Exception:
+        pass
 ui_cfg = dict(UI_DEFAULT)
 
 
@@ -945,7 +958,7 @@ def generate_srt(clip_path, start_epoch, duration, track):
                 best = g
         if best is None:
             continue
-        tstr = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(cue_epoch)) + " UTC"
+        tstr = time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(cue_epoch))
         lat, lon, fix = best.get("lat"), best.get("lon"), best.get("fix")
         if lat is not None and lon is not None and fix and fix != "none":
             ms = best.get("speed") or 0
@@ -977,7 +990,10 @@ def srt_loop():
             for c in clips:
                 base = os.path.basename(c)[:-4]
                 try:
-                    starts[c] = calendar.timegm(time.strptime(base, "%Y%m%d_%H%M%S"))
+                    # ffmpeg's -strftime schrijft de naam in de LOKALE tijd van het proces, dus
+                    # hier ook lokaal terugrekenen. Stond eerder op timegm (UTC); dat klopte
+                    # alleen zolang het toestel zelf nog op UTC stond.
+                    starts[c] = time.mktime(time.strptime(base, "%Y%m%d_%H%M%S"))
                 except Exception:
                     pass
             ordered = sorted(starts, key=lambda c: starts[c])
@@ -2123,6 +2139,10 @@ class H(BaseHTTPRequestHandler):
                 ui_cfg["units"] = q["units"][0]
             if "hide_short_trips" in q:
                 ui_cfg["hide_short_trips"] = q["hide_short_trips"][0] in ("1", "true")
+            if "tz" in q and re.match(r"^[A-Za-z0-9_+/-]{1,40}$", q["tz"][0]):
+                if os.path.exists("/usr/share/zoneinfo/" + q["tz"][0]):
+                    ui_cfg["tz"] = q["tz"][0]
+                    apply_tz()
             save_ui_settings()
             return self._send(200, "application/json", json.dumps(ui_cfg))
         if p == "/lora/status":
@@ -2803,7 +2823,22 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
       <option value="nl">Nederlands</option><option value="en">English</option></select></div>
     <div class="ledrow"><label data-t="units">Eenheden</label><select class="ledsel" id="uiUnits">
       <option value="kmh" data-t="unitMetric">km/u · meter · °C</option><option value="mph" data-t="unitImperial">mph · feet · °F</option></select></div>
+    <div class="ledrow"><label data-t="timezone">Tijdzone</label><select class="ledsel" id="uiTz">
+      <option value="Europe/Amsterdam">Europe/Amsterdam</option>
+      <option value="Europe/Brussels">Europe/Brussels</option>
+      <option value="Europe/Berlin">Europe/Berlin</option>
+      <option value="Europe/Paris">Europe/Paris</option>
+      <option value="Europe/London">Europe/London</option>
+      <option value="Europe/Madrid">Europe/Madrid</option>
+      <option value="Europe/Rome">Europe/Rome</option>
+      <option value="Europe/Warsaw">Europe/Warsaw</option>
+      <option value="America/New_York">America/New_York</option>
+      <option value="America/Chicago">America/Chicago</option>
+      <option value="America/Denver">America/Denver</option>
+      <option value="America/Los_Angeles">America/Los_Angeles</option>
+      <option value="UTC">UTC</option></select></div>
     <div class="muted" style="font-size:11px;margin-top:8px" data-t="prefsNote">Geldt voor het dashboard én de GPS-overlay in nieuwe opnames. Wordt bewaard op het toestel.</div>
+    <div class="muted" style="font-size:11px;margin-top:6px" data-t="tzNote">De tijdzone bepaalt ook de namen van clips en ritten. Zomer- en wintertijd gaan vanzelf mee.</div>
   </div></div>
 
   <div class="card" data-tab="settings"><h2><span data-t="cLed">LED-bediening</span> <span id="ledModeState" class="pill b">–</span></h2><div class="body">
@@ -2969,6 +3004,7 @@ const I18N={nl:{},en:{
  powerHealth:'Power',pwOk:'stable',pwDipped:'ok · dipped earlier',pwLow:'undervoltage',
  routeNone:'no route logged (no GPS fix during this trip)',routePts:'points',routeTop:'max',
  ttffLabel:'GPS fix after start',ttffWaiting:'no fix yet',satsSeen:'sat. seen',
+ timezone:'Time zone',tzNote:'The time zone also sets the names of clips and trips. Daylight saving follows automatically.',
  off:'Off',sensHigh:'Sensitive (1.5 g)',sensMed:'Normal (2.0 g)',sensLow:'Low (3.0 g)',
  recNote:'Standalone dashcam mode: records to /mnt/data/clips (1080p30, hardware H.264), oldest clips are deleted past the limit, GPS + motion logged alongside. "Camera off" stops recording but stays standalone. Survives a reboot — in a car it just runs whenever it has power.',
  lockNote:'Incident lock: on an impact or hard stop above the threshold the clip is protected 🔒 and never auto-deleted.',
@@ -3371,8 +3407,11 @@ setInterval(()=>{if(document.querySelector('.tabbtn[data-tab="settings"]').class
 
 // ---- Voorkeuren (taal + eenheden) ----
 async function loadPrefs(){try{const d=await jget('/ui/get');LANG=d.lang||'en';UNITS=d.units||'kmh';
-  $('uiLang').value=LANG;$('uiUnits').value=UNITS;applyLang();fillLedSelects();loadLedState();
+  $('uiLang').value=LANG;$('uiUnits').value=UNITS;
+  if(d.tz)$('uiTz').value=d.tz;
+  applyLang();fillLedSelects();loadLedState();
 }catch(e){}}
+$('uiTz').onchange=async()=>{await fetch('/ui/set?tz='+encodeURIComponent($('uiTz').value));tickSys();};
 $('uiLang').onchange=async()=>{LANG=$('uiLang').value;applyLang();fillLedSelects();loadLedState();
   await fetch('/ui/set?lang='+LANG);loadRec();loadClips();renderTrips();tick();};
 $('uiUnits').onchange=async()=>{UNITS=$('uiUnits').value;await fetch('/ui/set?units='+UNITS);tick();tickSys();};
@@ -3592,6 +3631,7 @@ if __name__ == "__main__":
     load_led_settings()
     load_rec_settings()
     load_ui_settings()
+    apply_tz()  # vóór alles wat tijdstempels of bestandsnamen maakt
     load_lora_settings()
     load_lora_state()
     load_wifi_settings()
