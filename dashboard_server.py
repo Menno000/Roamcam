@@ -2586,12 +2586,45 @@ PAGE = r"""<!doctype html><html lang="nl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HDC Dashboard</title>
 <style>
-:root{--bg:#0b0e14;--card:#141925;--card2:#1a2130;--bd:#232c3d;--tx:#e6edf3;--mut:#8b98ac;--acc:#4da3ff;--ok:#3fb950;--warn:#d29922;--err:#f85149;--mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+:root{--bg:#0b0e14;--card:#141925;--card2:#1a2130;--bd:#232c3d;--tx:#e6edf3;--mut:#8b98ac;--acc:#4da3ff;--ok:#3fb950;--warn:#d29922;--err:#f85149;--mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;--fs:14px;--btn:#182236;--scopebg:#080b11;--grid:#1c2432;--hdr:linear-gradient(180deg,#161c2b,#111622)}
+/* Lichte variant: alleen de kleurvariabelen omzetten, de rest van de opmaak blijft gelijk. */
+:root[data-theme="light"]{--bg:#eef1f6;--card:#ffffff;--card2:#f3f5f9;--bd:#d3dae6;--tx:#141a24;--mut:#5b6879;--acc:#0b6bcb;--ok:#1a7f37;--warn:#9a6700;--err:#c0392b;--btn:#e8edf5;--hdr:linear-gradient(180deg,#ffffff,#eef2f8);--scopebg:#e4e9f1;--grid:#c3ccda}
+/* Een deel van de opmaak heeft vaste donkere kleuren die niet met de variabelen meebewegen.
+   Zonder deze correcties wordt licht onleesbaar: donkere knop met donkere tekst, of lichtgrijze
+   tekst op wit. Alleen deze uitzonderingen omzetten; de rest volgt vanzelf. */
+:root[data-theme="light"] .clipbtn{background:var(--btn)}
+:root[data-theme="light"] pre{color:#33415a}
+:root[data-theme="light"] .badge,
+:root[data-theme="light"] .tabbtn.on,
+:root[data-theme="light"] .segbtn.on,
+:root[data-theme="light"] .ledbtn.on,
+:root[data-theme="light"] .clipbtn.play{background:#d6e6fb;color:#0b4a86;border-color:#b6d3f5}
+:root[data-theme="light"] .pill.g{background:#dcf5e3;color:#15803d}
+:root[data-theme="light"] .pill.r{background:#fde2e0;color:#b42318}
+:root[data-theme="light"] .pill.y{background:#fdf0d5;color:#8a5a00}
+:root[data-theme="light"] .pill.b{background:#dbeafe;color:#1d4ed8}
+:root[data-theme="light"] .clipbtn.del{background:#fde2e0;color:#b42318;border-color:#f3bdb8}
+:root[data-theme="light"] .clipbtn.lockon{background:#fdf0d5;border-color:#e6cf9a}
+:root[data-theme="light"] .cliprow.lockedrow{background:linear-gradient(90deg,rgba(210,153,34,.18),transparent 60%)}
+:root[data-theme="light"] .dot.dim{background:#9aa7b8}
+:root[data-theme="light"] .led .ring,
+:root[data-theme="light"] .ledswatch{border-color:var(--bd)}
+:root[data-theme="light"] .abar::before{background:var(--bd)}
+:root[data-theme="light"] .toast{box-shadow:0 6px 22px rgba(0,0,0,.14)}
+.viewctl{display:flex;gap:5px;align-items:center;margin-left:12px}
+.viewctl button{background:var(--btn);color:var(--tx);border:1px solid var(--bd);border-radius:7px;width:30px;height:30px;cursor:pointer;font-size:12px;line-height:1;display:flex;align-items:center;justify-content:center}
+.viewctl button:hover{border-color:var(--acc)}
+.toast{position:fixed;left:50%;transform:translateX(-50%) translateY(-20px);top:14px;z-index:99;
+  background:var(--card);border:1px solid var(--bd);border-left:4px solid var(--ok);color:var(--tx);
+  padding:10px 16px;border-radius:9px;font-size:13px;box-shadow:0 6px 22px rgba(0,0,0,.35);
+  opacity:0;pointer-events:none;transition:opacity .18s,transform .18s}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.toast.bad{border-left-color:var(--err)}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--tx);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;line-height:1.45}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:var(--fs);line-height:1.45}
 a{color:var(--acc)}
 .wrap{max-width:1400px;margin:0 auto;padding:16px}
-header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;padding:14px 18px;background:linear-gradient(180deg,#161c2b,#111622);border:1px solid var(--bd);border-radius:14px;margin-bottom:16px}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;padding:14px 18px;background:var(--hdr);border:1px solid var(--bd);border-radius:14px;margin-bottom:16px}
 header h1{font-size:18px;margin:0;font-weight:700;letter-spacing:.2px}
 .badge{font-size:11px;font-weight:700;padding:3px 9px;border-radius:20px;background:#0d3a63;color:#9fd0ff;text-transform:uppercase;letter-spacing:.5px}
 .hstat{display:flex;flex-direction:column;line-height:1.2}
@@ -2608,7 +2641,7 @@ header h1{font-size:18px;margin:0;font-weight:700;letter-spacing:.2px}
 .kv .k{color:var(--mut)}.kv .v{text-align:right;font-variant-numeric:tabular-nums}
 .mono{font-family:var(--mono);font-size:12.5px}
 .big{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
-.bar{height:8px;background:#0c1017;border-radius:6px;overflow:hidden;margin-top:5px}
+.bar{height:8px;background:var(--scopebg);border-radius:6px;overflow:hidden;margin-top:5px}
 .bar>i{display:block;height:100%;background:linear-gradient(90deg,#2ea043,#3fb950)}
 .bar.hot>i{background:linear-gradient(90deg,#d29922,#f85149)}
 .frame{width:100%;display:block;background:#000;aspect-ratio:16/9;object-fit:cover}
@@ -2633,7 +2666,7 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
 .arow{display:flex;align-items:center;gap:8px;margin-bottom:7px;font-size:12px}
 .arow span{width:12px;color:var(--mut)}
 .arow b{width:56px;text-align:right;font-variant-numeric:tabular-nums;font-family:var(--mono);font-size:12px}
-.abar{flex:1;height:10px;background:#0c1017;border-radius:5px;position:relative;overflow:hidden}
+.abar{flex:1;height:10px;background:var(--scopebg);border-radius:5px;position:relative;overflow:hidden}
 .abar::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:1px;background:#334155}
 .abar>i{position:absolute;top:0;bottom:0;left:50%;width:0;background:linear-gradient(90deg,#4dabf7,#74c0fc);border-radius:5px}
 .abar.g>i{background:linear-gradient(90deg,#b197fc,#d0bfff)}
@@ -2690,7 +2723,13 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
   <div class="hstat"><b id="temp2">–</b><span>cpu temp</span></div>
   <div class="hstat"><b id="clock">–</b><span data-t="hDeviceTime">device tijd</span></div>
   <div class="hstat" style="margin-left:auto"><b id="conn"><span class="dot ok"></span>live</b><span>poll 1.5s</span></div>
+  <div class="viewctl">
+    <button id="fontDown" title="kleiner" aria-label="tekst kleiner">a</button>
+    <button id="fontUp" title="groter" aria-label="tekst groter" style="font-size:17px">A</button>
+    <button id="themeBtn" title="licht / donker" aria-label="licht of donker">◐</button>
+  </div>
 </header>
+<div id="toast" class="toast"></div>
 <nav class="tabbar">
   <button class="tabbtn on" data-tab="live" data-t="tabLive">Live</button>
   <button class="tabbtn" data-tab="terug" data-t="tabPlayback">Terugkijken</button>
@@ -2702,7 +2741,7 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
   <div class="card span2" id="imuCard" data-tab="live"><h2><span data-t="cImu">Live IMU / G-sensor</span>
       <span><span id="imuRate" class="muted" style="font-weight:400">– Hz</span> &nbsp;<span id="shockPill" class="pill g">–</span></span></h2>
     <div class="body">
-      <canvas id="scope" height="150" style="width:100%;height:150px;background:#080b11;border-radius:8px;display:block"></canvas>
+      <canvas id="scope" height="150" style="width:100%;height:150px;background:var(--scopebg);border-radius:8px;display:block"></canvas>
       <div style="display:flex;gap:8px;font-size:11px;margin:6px 2px 12px" class="muted">
         <span style="color:#ff6b6b">■ X</span><span style="color:#51cf66">■ Y</span><span style="color:#4dabf7">■ Z</span>
         <span style="margin-left:auto" data-t="imuScope">accelerometer (g) · laatste ~1,5 s</span>
@@ -2982,6 +3021,39 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
 </div>
 <script>
 const $=id=>document.getElementById(id);
+
+// ---- Weergave: tekstgrootte + licht/donker. Bewust in de browser bewaard en niet op de
+// camera: het is een kijkvoorkeur, zodat je telefoon en laptop elk hun eigen instelling houden.
+let TOAST_T=null;
+function toast(msg,ok=true){
+  const el=$('toast');if(!el)return;
+  el.textContent=msg;el.className='toast show'+(ok?'':' bad');
+  clearTimeout(TOAST_T);TOAST_T=setTimeout(()=>{el.className='toast';},2200);
+}
+// Elke opslaan-actie loopt hierlangs, zodat er nooit een knop is die stil zijn werk doet.
+async function saveWith(url,okMsg){
+  try{
+    const r=await fetch(url);
+    let ok=r.ok;
+    try{const j=await r.clone().json();if(j&&j.ok===false)ok=false;}catch(e){}
+    toast(ok?(okMsg||tt('saved','Opgeslagen')):tt('saveFail','Opslaan mislukt'),ok);
+    return ok;
+  }catch(e){toast(tt('saveFail','Opslaan mislukt'),false);return false;}
+}
+const FS_STEPS=[12,13,14,16,18,20,22];
+function applyFont(){document.documentElement.style.setProperty('--fs',
+  FS_STEPS[Math.min(FS_STEPS.length-1,Math.max(0,+(localStorage.getItem('rcFont')||3)))]+'px');}
+function bumpFont(d){
+  let i=Math.min(FS_STEPS.length-1,Math.max(0,(+(localStorage.getItem('rcFont')||3))+d));
+  localStorage.setItem('rcFont',i);applyFont();
+  toast(tt('textSize','Tekstgrootte')+' '+FS_STEPS[i]+'px');
+}
+function applyTheme(){
+  const t=localStorage.getItem('rcTheme')||'dark';
+  document.documentElement.setAttribute('data-theme',t);
+}
+applyFont();applyTheme();
+
 // ---- i18n + eenheden ----
 const I18N={nl:{},en:{
  hDeviceTime:'device time',tabLive:'Live',tabPlayback:'Playback',tabSettings:'Settings',tabSystem:'System',
@@ -3005,6 +3077,9 @@ const I18N={nl:{},en:{
  routeNone:'no route logged (no GPS fix during this trip)',routePts:'points',routeTop:'max',
  ttffLabel:'GPS fix after start',ttffWaiting:'no fix yet',satsSeen:'sat. seen',
  timezone:'Time zone',tzNote:'The time zone also sets the names of clips and trips. Daylight saving follows automatically.',
+ saved:'Saved',saveFail:'Saving failed',tzSaved:'Time zone set',loraSaved:'Saved',loraSwitching:'switching…',
+ wifiSaved:'Network settings saved',secSet:'Password set',secCleared:'Password removed',
+ textSize:'Text size',themeLight:'Light view',themeDark:'Dark view',
  off:'Off',sensHigh:'Sensitive (1.5 g)',sensMed:'Normal (2.0 g)',sensLow:'Low (3.0 g)',
  recNote:'Standalone dashcam mode: records to /mnt/data/clips (1080p30, hardware H.264), oldest clips are deleted past the limit, GPS + motion logged alongside. "Camera off" stops recording but stays standalone. Survives a reboot — in a car it just runs whenever it has power.',
  lockNote:'Incident lock: on an impact or hard stop above the threshold the clip is protected 🔒 and never auto-deleted.',
@@ -3234,7 +3309,7 @@ function drawScope(hist){
   const w=scope.width=scope.clientWidth*devicePixelRatio, h=scope.height=150*devicePixelRatio;
   sctx.clearRect(0,0,w,h);
   // nul-lijn
-  sctx.strokeStyle='#1c2432';sctx.lineWidth=1;
+  sctx.strokeStyle=getComputedStyle(document.documentElement).getPropertyValue('--grid').trim()||'#1c2432';sctx.lineWidth=1;
   sctx.beginPath();sctx.moveTo(0,h/2);sctx.lineTo(w,h/2);sctx.stroke();
   if(!hist||!hist.length)return;
   const range=2.0; // ±2g op volle hoogte
@@ -3316,10 +3391,10 @@ async function loadRec(){try{const d=await jget('/rec/status');const run=d.runni
 $('recStart').onclick=async()=>{$('recStat').textContent=tt('freeing','camera vrijmaken…');await fetch('/rec/start');setTimeout(loadRec,8000);};
 $('recStop').onclick=async()=>{$('recStat').textContent=tt('stopping','opname stoppen…');await fetch('/rec/stop');setTimeout(loadRec,2500);};
 $('recHive').onclick=async()=>{if(!confirm(tt('confirmHive','Hivemapper-camera herstellen (standalone verlaten)?')))return;$('recStat').textContent=tt('restoring','herstellen…');await fetch('/rec/hivemapper');setTimeout(loadRec,3000);};
-$('recSeg').onchange=()=>fetch('/rec/set?seg='+$('recSeg').value);
-$('recCap').onchange=()=>fetch('/rec/set?cap_gb='+$('recCap').value);
-$('recG').onchange=()=>fetch('/rec/set?gforce='+$('recG').value);
-$('recMoment').onchange=()=>fetch('/rec/set?moment_sens='+$('recMoment').value);
+$('recSeg').onchange=()=>saveWith('/rec/set?seg='+$('recSeg').value);
+$('recCap').onchange=()=>saveWith('/rec/set?cap_gb='+$('recCap').value);
+$('recG').onchange=()=>saveWith('/rec/set?gforce='+$('recG').value);
+$('recMoment').onchange=()=>saveWith('/rec/set?moment_sens='+$('recMoment').value);
 async function loadMomentCal(){
   try{
     const c=await jget('/moments/calibration'),el=$('momentCal');
@@ -3331,9 +3406,9 @@ async function loadMomentCal(){
     el.textContent=s;
   }catch(e){}
 }
-$('recTripKeep').onchange=()=>fetch('/rec/set?trip_keep_days='+$('recTripKeep').value);
+$('recTripKeep').onchange=()=>saveWith('/rec/set?trip_keep_days='+$('recTripKeep').value);
 async function applyRecChangeAndRestart(qs){
-  await fetch('/rec/set?'+qs);
+  await saveWith('/rec/set?'+qs);
   if(RECORDER_RUNNING){
     $('recStat').textContent=tt('freeing','camera vrijmaken…');
     await fetch('/rec/stop');await new Promise(r=>setTimeout(r,2000));
@@ -3366,13 +3441,20 @@ async function loadLora(){try{const d=await jget('/lora/status');
   if(!LORA_LOADED_ONCE){$('loraBackend').value=d.backend_wanted||'off';$('loraDevEui').value=d.deveui||'';loraShowFields();LORA_LOADED_ONCE=true;}
 }catch(e){}}
 $('loraSave').onclick=async()=>{
+  const b=$('loraBackend').value;
   const params=new URLSearchParams();
-  params.set('backend',$('loraBackend').value);
+  params.set('backend',b);
   if($('loraDevEui').value.trim())params.set('deveui',$('loraDevEui').value.trim());
   if($('loraAppKey').value.trim())params.set('appkey',$('loraAppKey').value.trim());
-  await fetch('/lora/set?'+params.toString());
+  const names={off:tt('off','Uit'),ttn:'The Things Network',meshtastic:'Meshtastic'};
+  // De backend schakelt op de achtergrond om en dat duurt seconden; daarom bevestigt de knop
+  // meteen dát het aankwam, en volgt het echte resultaat daarna vanzelf in de statusregel.
+  if(await saveWith('/lora/set?'+params.toString(),tt('loraSaved','Opgeslagen')+': '+names[b])){
+    $('loraSave').textContent=tt('loraSwitching','omschakelen…');
+    setTimeout(()=>{$('loraSave').textContent=tt('loraSaveBtn','Opslaan');},4000);
+  }
   $('loraAppKey').value='';
-  setTimeout(loadLora,500);
+  setTimeout(loadLora,500);setTimeout(loadLora,2500);setTimeout(loadLora,5000);
 };
 $('loraMeshTest').onclick=async()=>{
   $('loraMeshTest').disabled=true;
@@ -3397,12 +3479,18 @@ $('wifiSave').onclick=async()=>{
   if($('wifiHomeSsid').value.trim())params.set('home_ssid',$('wifiHomeSsid').value.trim());
   if($('wifiHomePsk').value)params.set('home_psk',$('wifiHomePsk').value);
   if($('wifiApPsk').value)params.set('ap_psk',$('wifiApPsk').value);
-  await fetch('/wifi/set?'+params.toString());
+  await saveWith('/wifi/set?'+params.toString(),tt('wifiSaved','Netwerkinstellingen opgeslagen'));
   $('wifiHomePsk').value='';$('wifiApPsk').value='';
   setTimeout(loadWifi,500);
 };
 $('wifiRetry').onclick=async()=>{$('wifiStatus').textContent=tt('freeing','bezig…');await fetch('/wifi/retry');setTimeout(loadWifi,3000);};
-$('secSave').onclick=async()=>{await fetch('/security/set?password='+encodeURIComponent($('secPw').value));$('secPw').value='';alert(tt('secSaved','Opgeslagen. Bij het volgende bezoek vraagt de browser om in te loggen als er een wachtwoord is ingesteld.'));};
+$('secSave').onclick=async()=>{
+  const had=$('secPw').value.length>0;
+  if(await saveWith('/security/set?password='+encodeURIComponent($('secPw').value),
+                    had?tt('secSet','Wachtwoord ingesteld'):tt('secCleared','Wachtwoord verwijderd'))){
+    setTimeout(()=>alert(tt('secSaved','Opgeslagen. Bij het volgende bezoek vraagt de browser om in te loggen als er een wachtwoord is ingesteld.')),250);
+  }
+  $('secPw').value='';};
 setInterval(()=>{if(document.querySelector('.tabbtn[data-tab="settings"]').classList.contains('on'))loadWifi();},5000);
 
 // ---- Voorkeuren (taal + eenheden) ----
@@ -3411,10 +3499,18 @@ async function loadPrefs(){try{const d=await jget('/ui/get');LANG=d.lang||'en';U
   if(d.tz)$('uiTz').value=d.tz;
   applyLang();fillLedSelects();loadLedState();
 }catch(e){}}
-$('uiTz').onchange=async()=>{await fetch('/ui/set?tz='+encodeURIComponent($('uiTz').value));tickSys();};
+$('uiTz').onchange=async()=>{
+  await saveWith('/ui/set?tz='+encodeURIComponent($('uiTz').value),tt('tzSaved','Tijdzone ingesteld'));tickSys();};
+$('fontDown').onclick=()=>bumpFont(-1);
+$('fontUp').onclick=()=>bumpFont(1);
+$('themeBtn').onclick=()=>{
+  const t=(localStorage.getItem('rcTheme')||'dark')==='dark'?'light':'dark';
+  localStorage.setItem('rcTheme',t);applyTheme();
+  toast(t==='light'?tt('themeLight','Lichte weergave'):tt('themeDark','Donkere weergave'));
+};
 $('uiLang').onchange=async()=>{LANG=$('uiLang').value;applyLang();fillLedSelects();loadLedState();
-  await fetch('/ui/set?lang='+LANG);loadRec();loadClips();renderTrips();tick();};
-$('uiUnits').onchange=async()=>{UNITS=$('uiUnits').value;await fetch('/ui/set?units='+UNITS);tick();tickSys();};
+  await saveWith('/ui/set?lang='+LANG);loadRec();loadClips();renderTrips();tick();};
+$('uiUnits').onchange=async()=>{UNITS=$('uiUnits').value;await saveWith('/ui/set?units='+UNITS);tick();tickSys();};
 
 // ---- Video-clips ----
 function playClip(n,label){const v=$('clipVideo');v.pause();v.innerHTML='';v.removeAttribute('src');
