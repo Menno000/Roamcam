@@ -90,6 +90,8 @@ def sysinfo():
         }
     except Exception:
         d["power"] = None
+    d["ttff"] = {"s": ttff_state["first_fix"], "since_boot": time.time() - ttff_state["boot"],
+                 "max_seen": ttff_state["max_seen"]}
     # geheugen
     mem = {}
     for line in read("/proc/meminfo").splitlines():
@@ -828,6 +830,12 @@ def zero_to_100_loop():
         time.sleep(0.15)
 
 
+# Tijd tot eerste fix, gemeten vanaf het opstarten. Zonder dit blijft het gissen of een trage
+# fix aan de ontvanger ligt of gewoon aan geen zicht op de hemel -- binnen ziet hij 0-7
+# satellieten en haalt hij het nooit, buiten had hij er 25 en meteen een fix.
+ttff_state = {"boot": time.time(), "first_fix": None, "max_seen": 0}
+
+
 def gnss_latest():
     db = imu_db()
     if not db:
@@ -835,13 +843,17 @@ def gnss_latest():
     try:
         c = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=2)
         try:
-            r = c.execute("select time,fix,latitude,longitude,altitude,speed,heading,satellites_used "
-                          "from gnss order by id desc limit 1").fetchone()
+            r = c.execute("select time,fix,latitude,longitude,altitude,speed,heading,satellites_used,"
+                          "satellites_seen from gnss order by id desc limit 1").fetchone()
         finally:
             c.close()
         if r:
+            if (r[8] or 0) > ttff_state["max_seen"]:
+                ttff_state["max_seen"] = r[8] or 0
+            if ttff_state["first_fix"] is None and r[1] in ("2D", "3D"):
+                ttff_state["first_fix"] = time.time() - ttff_state["boot"]
             return {"time": r[0], "fix": r[1], "lat": r[2], "lon": r[3], "alt": r[4],
-                    "speed": r[5], "heading": r[6], "sats": r[7]}
+                    "speed": r[5], "heading": r[6], "sats": r[7], "seen": r[8]}
     except Exception:
         pass
     return {}
@@ -2888,6 +2900,7 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
     <div class="kv" style="margin-top:8px">
       <div class="k" data-t="cpuTemp">CPU-temp</div><div class="v" id="temp">–</div>
       <div class="k" data-t="powerHealth">Voeding</div><div class="v" id="power">–</div>
+      <div class="k" data-t="ttffLabel">GPS-fix na start</div><div class="v" id="ttff">–</div>
       <div class="k" data-t="cpuClock">CPU-klok / gov.</div><div class="v" id="mhz">–</div>
       <div class="k">Load (1/5/15m)</div><div class="v mono" id="load">–</div>
       <div class="k" data-t="coresProcs">Cores / processen</div><div class="v" id="cpuproc">–</div>
@@ -2955,6 +2968,7 @@ const I18N={nl:{},en:{
  calMore:'Rate a few more to get a recommendation.',
  powerHealth:'Power',pwOk:'stable',pwDipped:'ok · dipped earlier',pwLow:'undervoltage',
  routeNone:'no route logged (no GPS fix during this trip)',routePts:'points',routeTop:'max',
+ ttffLabel:'GPS fix after start',ttffWaiting:'no fix yet',satsSeen:'sat. seen',
  off:'Off',sensHigh:'Sensitive (1.5 g)',sensMed:'Normal (2.0 g)',sensLow:'Low (3.0 g)',
  recNote:'Standalone dashcam mode: records to /mnt/data/clips (1080p30, hardware H.264), oldest clips are deleted past the limit, GPS + motion logged alongside. "Camera off" stops recording but stays standalone. Survives a reboot — in a car it just runs whenever it has power.',
  lockNote:'Incident lock: on an impact or hard stop above the threshold the clip is protected 🔒 and never auto-deleted.',
@@ -3123,6 +3137,12 @@ async function tickSys(){
       else if(s.power.undervolt_ever)pw.innerHTML='<span class="pill y">'+tt('pwDipped','ok · eerder gedipt')+'</span>';
       else pw.innerHTML='<span class="pill g">'+tt('pwOk','stabiel')+'</span>';
     } else pw.textContent='–';
+    if(s.ttff){
+      const sat=' · '+(s.ttff.max_seen||0)+' '+tt('satsSeen','sat. gezien');
+      $('ttff').innerHTML = (s.ttff.s!=null)
+        ? '<span class="pill g">'+Math.round(s.ttff.s)+' s</span>'+sat
+        : '<span class="pill y">'+tt('ttffWaiting','nog geen fix')+' ('+fmtDur(s.ttff.since_boot)+')</span>'+sat;
+    }
     // CPU-gebruik totaal + per core
     if(s.cpu){const all=s.cpu.cpu;if(all!=null){$('cpuAll').textContent=all+' %';$('cpuAllBar').style.width=all+'%';$('cpuAllWrap').className='bar'+(all>85?' hot':'');}
       const cores=Object.keys(s.cpu).filter(k=>k!=='cpu').sort();
