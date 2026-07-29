@@ -1205,7 +1205,8 @@ def latest_frame():
 LORA_DEFAULT = {"backend": "off", "deveui": "", "appkey": "", "joineui": "0000000000000000"}
 lora_cfg = dict(LORA_DEFAULT)
 lora_state = {"status": "off", "backend": "off", "devaddr": None, "attempts": 0, "uplinks": 0,
-              "last_join_attempt": 0, "last_uplink": 0, "last_error": "", "last_freq": 0}
+              "last_join_attempt": 0, "last_uplink": 0, "last_error": "", "last_freq": 0,
+              "mesh_tx": 0, "mesh_rx": 0}
 # Dit toestel staat niet continu onder spanning (gaat aan/uit met het contact), dus alleen-in-
 # geheugen tellers zoals attempts/uplinks zouden bij elk kort ritje weer op 0 beginnen. Deze paar
 # velden checkpointen we naar schijf zodat ze een dag vol korte ritjes overleven.
@@ -1290,17 +1291,25 @@ def meshtasticd_stop():
 
 
 def meshtasticd_check_log():
-    # geen protobuf-API-client hier -- we lezen simpelweg de laatste regels van het eigen logje
+    # Eerder meldde dit "verbonden" zodra de chip was opgestart. Dat is misleidend: opgestart
+    # zegt niets over of er ooit een ander toestel is gehoord. meshtasticd houdt zelf tellers
+    # bij (txGood/rxGood); alleen rxGood > 0 bewijst dat er echt contact is geweest.
     try:
         with open(MESHTASTICD_DIR + "/run.log", "rb") as f:
             f.seek(0, 2)
             size = f.tell()
-            f.seek(max(0, size - 4000))
+            f.seek(max(0, size - 20000))
             tail = f.read().decode(errors="ignore")
-        if "sx1262 init success" in tail or "API server listen" in tail:
-            return "joined"
-        if "Failed" in tail or "error" in tail.lower():
-            return "searching"
+        m = None
+        for m in re.finditer(r"txGood=(\d+),txRelay=(\d+),rxGood=(\d+),rxBad=(\d+)", tail):
+            pass
+        if m:
+            tx, _relay, rx, rxbad = (int(m.group(i)) for i in (1, 2, 3, 4))
+            lora_state["mesh_tx"], lora_state["mesh_rx"] = tx, rx + rxbad
+            if rx > 0:
+                return "joined"       # echt een ander toestel gehoord
+        started = "sx1262 init success" in tail or "API server listen" in tail
+        return "searching" if started else "off"
     except Exception:
         pass
     return "searching"
@@ -3140,6 +3149,7 @@ const I18N={nl:{},en:{
  powerHealth:'Power',pwOk:'stable',pwDipped:'ok · dipped earlier',pwLow:'undervoltage',
  routeNone:'no route logged (no GPS fix during this trip)',routePts:'points',routeTop:'max',
  ttffLabel:'GPS fix after start',ttffWaiting:'no fix yet',satsSeen:'sat. seen',
+ meshHeard:'heard from others',meshSent:'sent',
  timezone:'Time zone',tzNote:'The time zone also sets the names of clips and trips. Daylight saving follows automatically.',
  saved:'Saved',saveFail:'Saving failed',tzSaved:'Time zone set',loraSaved:'Saved',loraSwitching:'switching…',
  wifiSaved:'Network settings saved',secSet:'Password set',secCleared:'Password removed',
@@ -3499,7 +3509,9 @@ async function loadLora(){try{const d=await jget('/lora/status');
   $('loraPill').textContent=$('loraStatus').textContent;
   $('loraPill').className='pill '+(st==='joined'?'g':(st==='searching'?'y':'b'));
   $('loraLastUplink').textContent=d.last_uplink?(fmtAgo(d.last_uplink)+' '+tt('ago','geleden')+(d.devaddr?'  ·  '+d.devaddr:'')):'–';
-  $('loraAttempts').textContent=(d.attempts||0)+(d.uplinks?' ('+d.uplinks+' verzonden)':'');
+  $('loraAttempts').textContent=(d.backend_wanted==='meshtastic')
+    ? (tt('meshHeard','gehoord van anderen')+': '+(d.mesh_rx||0)+' · '+tt('meshSent','zelf verzonden')+': '+(d.mesh_tx||0))
+    : (d.attempts||0)+(d.uplinks?' ('+d.uplinks+' verzonden)':'');
   $('loraLastError').textContent=d.last_error||'–';
   $('loraMeshMissing').style.display=(d.backend_wanted==='meshtastic'&&!d.meshtastic_installed)?'block':'none';
   if(!LORA_LOADED_ONCE){$('loraBackend').value=d.backend_wanted||'off';$('loraDevEui').value=d.deveui||'';
