@@ -1205,7 +1205,7 @@ def latest_frame():
 LORA_DEFAULT = {"backend": "off", "deveui": "", "appkey": "", "joineui": "0000000000000000"}
 lora_cfg = dict(LORA_DEFAULT)
 lora_state = {"status": "off", "backend": "off", "devaddr": None, "attempts": 0, "uplinks": 0,
-              "last_join_attempt": 0, "last_uplink": 0, "last_error": ""}
+              "last_join_attempt": 0, "last_uplink": 0, "last_error": "", "last_freq": 0}
 # Dit toestel staat niet continu onder spanning (gaat aan/uit met het contact), dus alleen-in-
 # geheugen tellers zoals attempts/uplinks zouden bij elk kort ritje weer op 0 beginnen. Deze paar
 # velden checkpointen we naar schijf zodat ze een dag vol korte ritjes overleven.
@@ -1487,11 +1487,35 @@ LORA_IRQ_TX_DONE = 1 << 0
 LORA_IRQ_RX_DONE = 1 << 1
 LORA_IRQ_TIMEOUT = 1 << 9
 LORA_JOIN_FREQ, LORA_JOIN_SF = 868100000, 7
+# EU868 kent drie verplichte join-kanalen. Echte apparaten wisselen daartussen; blijven hangen
+# op één kanaal maakt je afhankelijk van dat ene kanaal net niet bezet zijn.
+LORA_JOIN_CHANNELS = (868100000, 868300000, 868500000)
 LORA_RX2_FREQ, LORA_RX2_SF = 869525000, 9
+
+
+def _lora_free_stale_gpio():
+    # meshtasticd claimt deze pinnen via de oude sysfs-interface. Wordt het hard afgebroken,
+    # dan blijven ze geexporteerd achter en faalt de TTN-backend daarna met "resource busy" --
+    # precies bij het wisselen van Meshtastic naar TTN. Alleen onze eigen vier pinnen.
+    for pin in (LORA_CS_OFFSET, LORA_BUSY_OFFSET, LORA_NRST_OFFSET, LORA_DIO1_OFFSET):
+        if os.path.exists("/sys/class/gpio/gpio%d" % pin):
+            try:
+                with open("/sys/class/gpio/unexport", "w") as f:
+                    f.write(str(pin))
+            except Exception:
+                pass
 
 
 class LoraRadio:
     def __init__(self):
+        try:
+            self.chip = gpiod.Chip(LORA_GPIOCHIP)
+            line = self.chip.get_line(LORA_CS_OFFSET)
+            line.request(consumer="roamcam_lora", type=gpiod.LINE_REQ_DIR_OUT, default_vals=[1])
+            line.release()
+        except OSError:
+            _lora_free_stale_gpio()  # eenmalig opruimen en daarna gewoon doorgaan
+            time.sleep(0.5)
         self.chip = gpiod.Chip(LORA_GPIOCHIP)
         self.cs = self.chip.get_line(LORA_CS_OFFSET)
         self.cs.request(consumer="roamcam_lora", type=gpiod.LINE_REQ_DIR_OUT, default_vals=[1])
@@ -1559,6 +1583,27 @@ class LoraRadio:
         r = self.cmd(0x12, [0x00], read_len=2)
         return struct.unpack(">H", r[:2])[0]
 
+    def write_register(self, addr, data):
+        self.cmd(0x0D, list(struct.pack(">H", addr)) + list(data))
+
+    def read_register(self, addr, length):
+        return self.cmd(0x1D, list(struct.pack(">H", addr)) + [0x00], read_len=length)
+
+    def set_lorawan_sync_word(self):
+        # 0x3444 = publiek netwerk (LoRaWAN). De chip staat na reset op 0x1424 (privé) en
+        # elke gateway filtert hierop: met het verkeerde woord hoort niemand je, ook al zend
+        # je op de juiste frequentie. Dit ontbrak, vandaar 119 join-pogingen zonder één event.
+        self.write_register(0x0740, [0x34, 0x44])
+
+    def set_pa_config_14dbm(self):
+        # Datasheet-tabel voor +14 dBm op een SX1262 (deviceSel=0). Zonder deze stap is het
+        # zendvermogen niet gedefinieerd; SetTxParams alleen is niet genoeg.
+        self.cmd(0x95, [0x02, 0x02, 0x00, 0x01])
+        self.write_register(0x08E7, [0x38])  # overstroombeveiliging op 140 mA
+
+    def calibrate_image_868(self):
+        self.cmd(0x98, [0xD7, 0xDB])  # 863-870 MHz
+
     def write_buffer(self, offset, data): self.cmd(0x0E, [offset] + list(data))
 
     def read_buffer(self, offset, length):
@@ -1584,9 +1629,12 @@ class LoraRadio:
 def _lora_configure(radio, freq_hz, sf, power=14):
     radio.set_standby_rc()
     radio.set_packet_type_lora()
+    radio.calibrate_image_868()
     radio.set_rf_frequency(freq_hz)
+    radio.set_pa_config_14dbm()
     radio.set_buffer_base_address(0, 0)
     radio.set_modulation_params_lora(sf=sf, bw=0x04, cr=1, ldro=0)
+    radio.set_lorawan_sync_word()  # moet ná set_packet_type_lora
     radio.set_tx_params(power_dbm=power, ramp=0x04)
 
 
@@ -1780,13 +1828,16 @@ def lora_loop():
                     appkey = bytes.fromhex(lora_cfg["appkey"])
                     joineui = bytes.fromhex(lora_cfg.get("joineui") or "0000000000000000")
                     devnonce = struct.unpack("<H", os.urandom(2))[0]
+                    # per poging een ander join-kanaal; RX1 luistert op datzelfde kanaal
+                    join_freq = LORA_JOIN_CHANNELS[lora_state["attempts"] % len(LORA_JOIN_CHANNELS)]
+                    lora_state["last_freq"] = join_freq
                     radio.reset()
                     jreq = _lora_build_join_request(appkey, joineui, deveui, devnonce)
-                    tx_done_t = _lora_tx(radio, LORA_JOIN_FREQ, LORA_JOIN_SF, jreq)
+                    tx_done_t = _lora_tx(radio, join_freq, LORA_JOIN_SF, jreq)
                     sleep_for = (tx_done_t + 5.0) - time.time()
                     if sleep_for > 0:
                         time.sleep(sleep_for)
-                    raw = _lora_rx_window(radio, LORA_JOIN_FREQ, LORA_JOIN_SF, window_s=1.5)
+                    raw = _lora_rx_window(radio, join_freq, LORA_JOIN_SF, window_s=1.5)
                     if raw is None:
                         sleep_for = (tx_done_t + 6.0) - time.time()
                         if sleep_for > 0:
