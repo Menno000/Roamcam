@@ -29,9 +29,11 @@ def read(path, default=""):
         return default
 
 
-def sh(cmd):
+def sh(cmd, timeout=6):
+    # timeout instelbaar: een wifi-scan duurt regelmatig langer dan 6 s en gaf dan stilletjes
+    # lege uitvoer terug -- wat zich voordeed als "geen netwerken gevonden".
     try:
-        return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=6).stdout.strip()
+        return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout).stdout.strip()
     except Exception:
         return ""
 
@@ -1125,6 +1127,9 @@ def led_color_for(fn):
         if st == "searching":
             return LED_COLORS["geel"]
         return LED_COLORS["uit"]
+    if fn == "netwerk":
+        # Van buitenaf zien waar hij op zit, zonder in te loggen.
+        return LED_COLORS["blauw"] if wifi_state.get("mode") == "home" else LED_COLORS["paars"]
     if fn == "temp":
         try:
             t = int(read("/sys/class/thermal/thermal_zone0/temp", "0")) / 1000.0
@@ -1230,6 +1235,43 @@ def save_lora_state():
             json.dump({k: lora_state[k] for k in LORA_STATE_PERSIST_KEYS}, f)
     except Exception:
         pass
+
+
+# ---- Eigen LoRa-logboek met tijdstempels ----
+# De tellers alleen zeggen te weinig: "163 pogingen" liep gewoon door toen we van TTN naar KPN
+# wisselden, terwijl geen van die pogingen bij KPN hoorde. Dit logboek zet er tijd en netwerk bij
+# zodat je in de auto kunt meelezen wat er werkelijk gebeurt.
+LORA_LOG_PATH = "/mnt/data/lora.log"
+LORA_LOG_MAX = 400
+_lora_log_lock = threading.Lock()
+
+
+def lora_log(msg):
+    line = "%s  %s" % (time.strftime("%d-%m %H:%M:%S"), msg)
+    try:
+        with _lora_log_lock:
+            lines = []
+            try:
+                with open(LORA_LOG_PATH) as f:
+                    lines = f.read().splitlines()
+            except Exception:
+                pass
+            lines.append(line)
+            with open(LORA_LOG_PATH, "w") as f:
+                f.write("\n".join(lines[-LORA_LOG_MAX:]) + "\n")
+    except Exception:
+        pass
+
+
+def lora_reset_counters(why):
+    # Bij een ander netwerk of andere sleutels beginnen de tellers opnieuw, anders tel je
+    # pogingen van een vorige configuratie mee.
+    for k in ("attempts", "uplinks", "mesh_tx", "mesh_rx"):
+        lora_state[k] = 0
+    lora_state["devaddr"] = None
+    lora_state["last_error"] = ""
+    save_lora_state()
+    lora_log("--- tellers op nul (%s) ---" % why)
 
 # ---- Meshtastic backend (optional second choice) ----
 # Needs meshtasticd + its .so dependencies manually staged under MESHTASTICD_DIR --
@@ -1802,6 +1844,7 @@ def lora_loop():
                     sh("systemctl stop lorawan-logger 2>/dev/null")
                     time.sleep(2)
                     lora_state["status"] = "searching"
+                lora_log("backend: %s -> %s" % (current_backend, wanted))
                 lora_state["backend"] = wanted
                 lora_state["last_error"] = ""
                 lora_state["devaddr"] = None
@@ -1840,6 +1883,9 @@ def lora_loop():
                     # per poging een ander join-kanaal; RX1 luistert op datzelfde kanaal
                     join_freq = LORA_JOIN_CHANNELS[lora_state["attempts"] % len(LORA_JOIN_CHANNELS)]
                     lora_state["last_freq"] = join_freq
+                    lora_log("join-poging %d op %.1f MHz SF%d (DevEUI %s)"
+                             % (lora_state["attempts"], join_freq / 1e6, LORA_JOIN_SF,
+                                lora_cfg.get("deveui", "?")))
                     radio.reset()
                     jreq = _lora_build_join_request(appkey, joineui, deveui, devnonce)
                     tx_done_t = _lora_tx(radio, join_freq, LORA_JOIN_SF, jreq)
@@ -1861,11 +1907,14 @@ def lora_loop():
                         lora_state["devaddr"] = result["devaddr"].hex()
                         next_uplink = 0.0
                         save_lora_state()
+                        lora_log("*** JOIN GELUKT -- DevAddr %s ***" % lora_state["devaddr"])
                     else:
                         lora_state["status"] = "searching"
+                        lora_log("   geen antwoord (niemand hoorde ons, of geen join-accept)")
                 except Exception as e:
                     lora_state["last_error"] = str(e)
                     save_lora_state()
+                    lora_log("   FOUT tijdens join: %s" % e)
                 continue
 
             # sessie actief: periodiek een klein positiebakentje sturen
@@ -1889,6 +1938,7 @@ def lora_loop():
                 lora_state["uplinks"] += 1
                 lora_state["last_uplink"] = time.time()
                 save_lora_state()
+                lora_log("uplink #%d verstuurd (%.5f, %.5f)" % (lora_state["uplinks"], lat, lon))
             except Exception as e:
                 lora_state["last_error"] = str(e)
                 save_lora_state()
@@ -1897,14 +1947,28 @@ def lora_loop():
             time.sleep(5)
 
 
-# ---- Thuisnetwerk (STA-modus) -- wisselt met de eigen AP, kan hardware-matig niet tegelijk.
-# Alleen geprobeerd bij het opstarten (niet doorlopend, anders knippert de AP telkens weg voor
-# iedereen die er direct op zit). Lukt het niet: gewoon de vertrouwde AP, de rest van deze sessie.
-WIFI_DEFAULT = {"home_ssid": "", "home_psk": "", "ap_psk": ""}
+# ---- Thuisnetwerk (STA-modus) ----
+# AP en thuisnetwerk kunnen op deze chip NIET tegelijk (gemeten: een tweede interface geeft
+# "Operation not supported"), dus het is schakelen. De vorige opzet ging twee keer mis omdat
+# hij blind omschakelde en met de hand udhcpc naast de draaiende dhcpcd zette. Nu:
+#
+#   1. de eigen AP is altijd de begintoestand, en de terugval
+#   2. eerst SCANNEN of het thuisnetwerk er echt is -- dat kan tijdens AP-modus en kost geen
+#      meetbare CPU (gemeten: 24,1% in rust tegen 23,1% met scans) -- en pas dan schakelen
+#   3. nooit wegschakelen zolang er iemand op de AP zit (zichtbaar in /proc/net/arp)
+#   4. dhcpcd doet het DHCP-werk, want dat is de systeem-DHCP-client; niet zelf udhcpc draaien
+#   5. /mnt/data/wifi.cfg blijft ongemoeid op "AP", zodat een herstart altijd schoon terugkomt
+#      op de eigen AP -- het vangnet dat vorige keer ontbrak
+WIFI_DEFAULT = {"home_ssid": "", "home_psk": "", "ap_psk": "", "home_enabled": True, "ap_name": ""}
 wifi_cfg = dict(WIFI_DEFAULT)
-wifi_state = {"mode": "ap", "home_ip": "", "last_error": "", "tried_boot": False}
-WPA_CONF_PATH = "/tmp/roamcam_wpa.conf"
-WIFI_BOOT_TIMEOUT_S = 25
+wifi_state = {"mode": "ap", "home_ip": "", "last_error": "", "last_scan": 0,
+              "seen": None, "signal": None, "clients": 0, "since": 0}
+WIFI_STA_WPA_CONF = "/etc/wpa_supplicant-sta.conf"
+WIFI_AP_DHCPCD = "/opt/dashcam/cfg/AP_dhcpcd.conf"
+WIFI_SETTLE_S = 60        # na opstarten even met rust laten, ruimte om zelf op de AP te komen
+WIFI_SCAN_EVERY_S = 30
+WIFI_LOST_GRACE_S = 120   # zo lang mag de thuisverbinding weg zijn voor we terugvallen
+WIFI_MIN_SIGNAL_DBM = -78
 
 
 def load_wifi_settings():
@@ -1932,96 +1996,205 @@ def save_wifi_settings():
         pass
 
 
-def _wifi_ap_up():
-    # Interface eerst hard resetten -- na een STA-poging staat wlan0 nog in client-modus,
-    # en de brcmfmac-firmware op dit toestel wisselt niet betrouwbaar zonder een down/up.
-    sh("pkill -f roamcam_wpa.conf 2>/dev/null; pkill udhcpc 2>/dev/null; pkill wpa_supplicant 2>/dev/null")
-    sh("ip addr flush dev wlan0 2>/dev/null")
-    sh("ip link set wlan0 down 2>/dev/null")
-    time.sleep(1)
-    sh("ip link set wlan0 up 2>/dev/null")
-    time.sleep(1)
-    sh("systemctl start hostapd 2>/dev/null")
-    wifi_state["mode"] = "ap"
-    wifi_state["home_ip"] = ""
-
-
-def _wifi_home_ip():
-    ip = read("/tmp/roamcam_sta.ip")
-    return ip if ip else ""
-
-
-def wifi_try_home_once():
-    # Éénmalige, tijdgebonden poging -- met een garandeerde terugval naar de AP, wat er ook gebeurt.
-    if not (wifi_cfg.get("home_ssid") and wifi_cfg.get("home_psk")):
-        return
+def wifi_ap_clients():
+    # Actieve clients op onze eigen AP. Vlag 0x2 = compleet ARP-record, dus echt aanwezig.
+    n = 0
     try:
-        sh("systemctl stop hostapd 2>/dev/null")
-        sh("pkill -f roamcam_wpa.conf 2>/dev/null; pkill udhcpc 2>/dev/null")
-        time.sleep(1)
-        conf = ('ctrl_interface=/var/run/wpa_supplicant\nnetwork={\n  ssid="%s"\n  psk="%s"\n}\n'
-                % (wifi_cfg["home_ssid"].replace('"', ""), wifi_cfg["home_psk"].replace('"', "")))
-        with open(WPA_CONF_PATH, "w") as f:
+        for ln in read("/proc/net/arp").splitlines()[1:]:
+            f = ln.split()
+            if len(f) >= 6 and f[-1] == "wlan0" and f[2] == "0x2":
+                n += 1
+    except Exception:
+        pass
+    return n
+
+
+def wifi_scan_for(ssid):
+    """Zoekt het opgegeven netwerk; werkt tijdens AP-modus zonder de AP te verstoren.
+    Geeft de signaalsterkte in dBm terug, of None als het niet gezien is."""
+    try:
+        out = sh("iwlist wlan0 scan 2>/dev/null", timeout=30)
+    except Exception:
+        return None
+    best, sig = None, None
+    for ln in out.splitlines():
+        ln = ln.strip()
+        if "Signal level" in ln:
+            m = re.search(r"Signal level[=:]\s*(-?\d+)", ln)
+            if m:
+                sig = int(m.group(1))
+        elif ln.startswith("ESSID:"):
+            name = ln.split(":", 1)[1].strip().strip('"')
+            if name == ssid:
+                cur = sig if sig is not None else -99
+                if best is None or cur > best:
+                    best = cur
+            sig = None
+    return best
+
+
+def wifi_scan_list():
+    """Alle netwerken in de buurt, sterkste eerst. Werkt tijdens AP-modus zonder de AP te
+    verstoren, zodat een gebruiker bij de eerste installatie gewoon kan kiezen."""
+    nets = {}
+    ssid = None
+    sig = None
+    enc = False
+    try:
+        out = sh("iwlist wlan0 scan 2>/dev/null", timeout=30)
+    except Exception:
+        return []
+    for ln in out.splitlines():
+        ln = ln.strip()
+        if ln.startswith("Cell "):
+            ssid, sig, enc = None, None, False
+        elif "Signal level" in ln:
+            m = re.search(r"Signal level[=:]\s*(-?\d+)", ln)
+            if m:
+                sig = int(m.group(1))
+        elif ln.startswith("Encryption key:"):
+            enc = ln.endswith("on")
+        elif ln.startswith("ESSID:"):
+            ssid = ln.split(":", 1)[1].strip().strip('"')
+            if ssid and ssid != "\\x00":
+                cur = nets.get(ssid)
+                if cur is None or (sig is not None and sig > cur["signal"]):
+                    nets[ssid] = {"ssid": ssid, "signal": sig if sig is not None else -99,
+                                  "secure": enc}
+    return sorted(nets.values(), key=lambda n: -n["signal"])
+
+
+def wifi_apply_ap_name():
+    """Zet een zelfgekozen naam voor het eigen netwerk. set_hostname.sh leidt die bij elke boot
+    af uit het serienummer en /etc is een RAM-overlay, dus we passen 'm bij elke start opnieuw
+    toe -- de gekozen naam zelf staat op /mnt/data en overleeft wel."""
+    name = (wifi_cfg.get("ap_name") or "").strip()
+    if not name:
+        return False
+    name = re.sub(r"[^A-Za-z0-9 _-]", "", name)[:32]
+    if not name:
+        return False
+    try:
+        conf = read("/etc/hostapd.conf")
+        if re.search(r"^ssid=.*$", conf, re.M):
+            conf = re.sub(r"^ssid=.*$", "ssid=" + name, conf, flags=re.M)
+        else:
+            conf += "\nssid=%s\n" % name
+        with open("/etc/hostapd.conf", "w") as f:
             f.write(conf)
-        sh("wpa_supplicant -B -i wlan0 -c %s 2>/mnt/data/wifi_sta.log" % WPA_CONF_PATH)
+        sh("hostname %s 2>/dev/null" % name.replace(" ", "-"))
+        if wifi_state.get("mode") == "ap":
+            sh("systemctl restart hostapd 2>/dev/null")
+        return True
+    except Exception:
+        return False
+
+
+def wifi_current_ap_name():
+    m = re.search(r"^ssid=(.*)$", read("/etc/hostapd.conf"), re.M)
+    return m.group(1).strip() if m else ""
+
+
+def _wifi_ip(dev="wlan0"):
+    out = sh("ip -4 -o addr show %s 2>/dev/null" % dev)
+    m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", out)
+    return m.group(1) if m else ""
+
+
+def wifi_to_ap(reason=""):
+    """Terug naar de eigen AP, met de configuratie van de fabrikant."""
+    sh("systemctl stop wpa_supplicant 2>/dev/null")
+    sh("killall wpa_supplicant 2>/dev/null")
+    sh("systemctl stop dhcpcd 2>/dev/null")
+    sh("ip addr flush dev wlan0 2>/dev/null")
+    sh("cp %s /etc/dhcpcd.conf 2>/dev/null" % WIFI_AP_DHCPCD)
+    sh("systemctl restart hostapd 2>/dev/null")
+    sh("systemctl restart dnsmasq 2>/dev/null")
+    sh("systemctl restart dhcpcd 2>/dev/null")
+    wifi_state.update(mode="ap", home_ip="", since=time.time())
+    if reason:
+        wifi_state["last_error"] = reason
+
+
+def wifi_to_home():
+    """Naar het thuisnetwerk. Alleen aanroepen als de scan het netwerk echt gezien heeft."""
+    ssid = wifi_cfg.get("home_ssid", "")
+    psk = wifi_cfg.get("home_psk", "")
+    if not (ssid and psk):
+        return False
+    try:
+        with open(WIFI_STA_WPA_CONF, "w") as f:
+            f.write("ctrl_interface=/var/run/wpa_supplicant\n"
+                    'network={\n  ssid="%s"\n  psk="%s"\n}\n'
+                    % (ssid.replace('"', ""), psk.replace('"', "")))
+        sh("systemctl stop hostapd 2>/dev/null")
+        sh("systemctl stop dnsmasq 2>/dev/null")
+        sh("systemctl stop dhcpcd 2>/dev/null")
+        sh("ip addr flush dev wlan0 2>/dev/null")
+        # dhcpcd moet wlan0 nu WEL beheren -- de AP-config verbiedt dat juist expliciet
+        # (denyinterfaces wlan0 + vast adres). Daar ging het vorige keer mis.
+        with open("/etc/dhcpcd.conf", "w") as f:
+            f.write("hostname\nclientid\npersistent\noption rapid_commit\n"
+                    "option domain_name_servers, domain_name, domain_search, host_name\n"
+                    "option classless_static_routes\noption interface_mtu\n"
+                    "require dhcp_server_identifier\nslaac private\nnoipv6rs\nnoipv6\n")
+        sh("wpa_supplicant -B -i wlan0 -c %s -Dnl80211 2>/mnt/data/wifi_sta.log" % WIFI_STA_WPA_CONF)
+        joined = False
         t0 = time.time()
-        connected = False
-        while time.time() - t0 < WIFI_BOOT_TIMEOUT_S:
-            st = sh("wpa_cli -i wlan0 status 2>/dev/null")
-            if "wpa_state=COMPLETED" in st:
-                connected = True
+        while time.time() - t0 < 25:
+            if "wpa_state=COMPLETED" in sh("wpa_cli -i wlan0 status 2>/dev/null"):
+                joined = True
                 break
             time.sleep(1)
-        if not connected:
-            wifi_state["last_error"] = "kon niet verbinden (SSID niet in bereik of verkeerd wachtwoord)"
-            raise RuntimeError("sta join failed")
-        sh("rm -f /tmp/roamcam_sta.ip")
-        # -s /bin/true deed NIETS -- dat script is juist verantwoordelijk voor het echt
-        # toepassen van het IP op de interface. udhcpc kreeg keurig een lease van de router
-        # (vandaar zichtbaar in de Deco-app), maar wlan0 zelf kreeg 'm nooit. Fix: een echt
-        # bind-script dat "ip addr add ... dev wlan0" uitvoert op het "bound"-event.
-        bind_script = "/tmp/roamcam_udhcpc_bind.sh"
-        with open(bind_script, "w") as f:
-            f.write("#!/bin/sh\n"
-                    "[ \"$1\" = bound -o \"$1\" = renew ] || exit 0\n"
-                    "ip addr flush dev wlan0\n"
-                    "ip addr add $ip/${mask:-24} dev wlan0\n"
-                    "[ -n \"$router\" ] && ip route replace default via $router dev wlan0\n")
-        sh("chmod +x %s" % bind_script)
-        sh("udhcpc -i wlan0 -n -q -s %s 2>/mnt/data/wifi_dhcp.log && "
-           "ip -4 -o addr show wlan0 | awk '{print $4}' | cut -d/ -f1 > /tmp/roamcam_sta.ip" % bind_script)
-        time.sleep(1)
-        ip = _wifi_home_ip()
-        if not ip:
-            wifi_state["last_error"] = "verbonden maar geen IP gekregen (DHCP)"
-            raise RuntimeError("dhcp failed")
-        wifi_state["mode"] = "home"
-        wifi_state["home_ip"] = ip
-        wifi_state["last_error"] = ""
+        if not joined:
+            wifi_to_ap("kon niet koppelen aan %s (wachtwoord?)" % ssid)
+            return False
+        sh("systemctl restart dhcpcd 2>/dev/null")
+        t0 = time.time()
+        while time.time() - t0 < 20:
+            ip = _wifi_ip()
+            if ip and ip != "192.168.0.10":
+                wifi_state.update(mode="home", home_ip=ip, last_error="", since=time.time())
+                return True
+            time.sleep(1)
+        wifi_to_ap("wel gekoppeld maar geen adres van de router")
+        return False
     except Exception as e:
-        if not wifi_state.get("last_error"):
-            wifi_state["last_error"] = str(e)
-        sh("pkill -f roamcam_wpa.conf 2>/dev/null; pkill udhcpc 2>/dev/null")
-        _wifi_ap_up()
+        wifi_to_ap("fout bij omschakelen: %s" % e)
+        return False
 
 
 def wifi_loop():
-    # Alleen bij opstarten proberen; daarna passief bewaken of de thuisverbinding nog leeft.
-    time.sleep(8)  # even wachten tot het systeem verder gebooot is
-    if not wifi_state["tried_boot"]:
-        wifi_state["tried_boot"] = True
-        wifi_try_home_once()
+    boot = time.time()
+    lost_since = 0
+    wifi_state["since"] = boot
     while True:
         try:
             if wifi_state["mode"] == "home":
-                st = sh("wpa_cli -i wlan0 status 2>/dev/null")
-                if "wpa_state=COMPLETED" not in st:
-                    wifi_state["last_error"] = "thuisnetwerk kwijtgeraakt, terug naar eigen AP"
-                    sh("pkill -f roamcam_wpa.conf 2>/dev/null; pkill udhcpc 2>/dev/null")
-                    _wifi_ap_up()
-        except Exception:
-            pass
-        time.sleep(15)
+                if "wpa_state=COMPLETED" in sh("wpa_cli -i wlan0 status 2>/dev/null"):
+                    lost_since = 0
+                    wifi_state["home_ip"] = _wifi_ip() or wifi_state["home_ip"]
+                else:
+                    lost_since = lost_since or time.time()
+                    if time.time() - lost_since > WIFI_LOST_GRACE_S:
+                        lost_since = 0
+                        wifi_to_ap("thuisnetwerk kwijt, terug op eigen AP")
+                time.sleep(15)
+                continue
+
+            # --- in AP-modus: mogen en kunnen we naar huis? ---
+            wifi_state["clients"] = wifi_ap_clients()
+            if (wifi_cfg.get("home_enabled") and wifi_cfg.get("home_ssid")
+                    and wifi_cfg.get("home_psk")
+                    and time.time() - boot > WIFI_SETTLE_S
+                    and wifi_state["clients"] == 0):
+                sig = wifi_scan_for(wifi_cfg["home_ssid"])
+                wifi_state.update(last_scan=time.time(), seen=sig is not None, signal=sig)
+                if sig is not None and sig >= WIFI_MIN_SIGNAL_DBM:
+                    wifi_to_home()
+        except Exception as e:
+            wifi_state["last_error"] = str(e)
+        time.sleep(WIFI_SCAN_EVERY_S)
 
 
 def wifi_set_ap_password(new_psk):
@@ -2227,10 +2400,26 @@ class H(BaseHTTPRequestHandler):
                 lora_state["last_error"] = str(e)
                 save_lora_state()
                 return self._send(200, "application/json", json.dumps({"ok": False, "error": str(e)}))
+        if p == "/lora/log":
+            try:
+                with open(LORA_LOG_PATH) as f:
+                    lines = f.read().splitlines()
+            except Exception:
+                lines = []
+            return self._send(200, "application/json", json.dumps({"lines": lines[-200:]}))
+        if p == "/lora/log_clear":
+            try:
+                os.remove(LORA_LOG_PATH)
+            except Exception:
+                pass
+            lora_log("--- logboek gewist ---")
+            return self._send(200, "application/json", json.dumps({"ok": True}))
         if p == "/lora/set":
             # keep_blank_values: anders negeert parse_qs een leeg veld en kun je een ingevulde
             # JoinEUI nooit meer weghalen. Dezelfde valkuil kostte ons eerder de wifi-instelling.
             q = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+            before = (lora_cfg.get("backend"), lora_cfg.get("deveui"),
+                      lora_cfg.get("joineui"), lora_cfg.get("appkey"))
             if "backend" in q and q["backend"][0] in ("off", "ttn", "meshtastic"):
                 lora_cfg["backend"] = q["backend"][0]
             if "deveui" in q:
@@ -2249,6 +2438,13 @@ class H(BaseHTTPRequestHandler):
                     lora_cfg["joineui"] = v.lower()
                 elif not v:
                     lora_cfg["joineui"] = "0000000000000000"
+            after = (lora_cfg.get("backend"), lora_cfg.get("deveui"),
+                     lora_cfg.get("joineui"), lora_cfg.get("appkey"))
+            if after != before:
+                lora_reset_counters("nieuwe instellingen: %s" %
+                                    ("uit" if after[0] == "off" else
+                                     ("Meshtastic" if after[0] == "meshtastic"
+                                      else "LoRaWAN DevEUI %s / JoinEUI %s" % (after[1], after[2]))))
             save_lora_settings()
             return self._send(200, "application/json", json.dumps({"ok": True}))
         if p == "/wifi/status":
@@ -2256,7 +2452,11 @@ class H(BaseHTTPRequestHandler):
             out["home_ssid"] = wifi_cfg.get("home_ssid", "")
             out["ap_ssid"] = read("/mnt/data/wifi.cfg").split(",")[0] if os.path.exists("/mnt/data/wifi.cfg") else ""
             out["dash_pw_set"] = bool(security_cfg.get("dash_pw_hash"))
-            out["current_ip"] = sh("hostname -I").split()[0] if sh("hostname -I") else ""
+            out["current_ip"] = _wifi_ip()
+            out["home_enabled"] = bool(wifi_cfg.get("home_enabled", True))
+            out["ap_name"] = wifi_current_ap_name()
+            out["ap_name_custom"] = wifi_cfg.get("ap_name", "")
+            out["configured"] = bool(wifi_cfg.get("home_ssid") and wifi_cfg.get("home_psk"))
             return self._send(200, "application/json", json.dumps(out))
         if p == "/wifi/set":
             # keep_blank_values=True -- anders negeert parse_qs lege waardes stilletjes,
@@ -2266,12 +2466,37 @@ class H(BaseHTTPRequestHandler):
                 wifi_cfg["home_ssid"] = q["home_ssid"][0][:64]
             if "home_psk" in q and q["home_psk"][0]:
                 wifi_cfg["home_psk"] = q["home_psk"][0][:64]
+            if "home_enabled" in q:
+                wifi_cfg["home_enabled"] = q["home_enabled"][0] in ("1", "true")
+            renamed = False
+            if "ap_name" in q:
+                wifi_cfg["ap_name"] = q["ap_name"][0][:32]
+                renamed = True
             save_wifi_settings()
+            if renamed:
+                wifi_apply_ap_name()
             if "ap_psk" in q and q["ap_psk"][0]:
                 wifi_set_ap_password(q["ap_psk"][0])
             return self._send(200, "application/json", json.dumps({"ok": True}))
-        if p == "/wifi/retry":
-            threading.Thread(target=wifi_try_home_once, daemon=True).start()
+        if p == "/wifi/scan":
+            # losse scan op verzoek -- verstoort de AP niet. Geeft de hele lijst terug zodat je
+            # bij de eerste installatie gewoon je netwerk kunt aanwijzen.
+            nets = wifi_scan_list()
+            want = wifi_cfg.get("home_ssid", "")
+            hit = next((n for n in nets if n["ssid"] == want), None)
+            wifi_state.update(last_scan=time.time(), seen=hit is not None,
+                              signal=hit["signal"] if hit else None)
+            return self._send(200, "application/json",
+                              json.dumps({"ok": True, "ssid": want, "networks": nets,
+                                          "seen": hit is not None,
+                                          "signal": hit["signal"] if hit else None}))
+        if p == "/wifi/home_now":
+            if wifi_state["mode"] == "home":
+                return self._send(200, "application/json", json.dumps({"ok": True, "already": True}))
+            threading.Thread(target=wifi_to_home, daemon=True).start()
+            return self._send(200, "application/json", json.dumps({"ok": True}))
+        if p == "/wifi/ap_now":
+            threading.Thread(target=wifi_to_ap, args=("handmatig teruggezet",), daemon=True).start()
             return self._send(200, "application/json", json.dumps({"ok": True}))
         if p == "/security/set":
             q = parse_qs(urlparse(self.path).query)
@@ -2858,6 +3083,15 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
     </div>
   </div>
 
+  <div class="card span2" data-tab="live"><h2><span data-t="cLoraLog">LoRa-logboek</span>
+    <span style="display:flex;gap:8px;align-items:center;text-transform:none;letter-spacing:0">
+      <span id="loraLogPill" class="pill b">–</span>
+      <button class="clipbtn" id="loraLogClear" style="font-size:11px" data-t="clearLog">wissen</button>
+    </span></h2><div class="body">
+    <pre id="loraLog" style="max-height:260px;font-size:11px">–</pre>
+    <div class="muted" style="font-size:11px;margin-top:6px" data-t="loraLogNote">Loopt live mee. "geen antwoord" betekent dat we wél gezonden hebben maar niemand terugkwam — bij een geslaagde join staat hier JOIN GELUKT met een DevAddr.</div>
+  </div></div>
+
   <div class="card span2" data-tab="terug"><h2><span data-t="cTrips">Ritten</span>
     <span class="segbtns" style="text-transform:none;letter-spacing:0">
       <button class="segbtn on" id="tripPerToday" data-t="perToday">Vandaag</button>
@@ -2994,16 +3228,22 @@ details summary{cursor:pointer;color:var(--acc);font-size:12px;margin-top:4px}
 
   <div class="card" data-tab="settings"><h2><span data-t="cWifi">Thuisnetwerk</span> <span id="wifiPill" class="pill b">–</span></h2><div class="body">
     <div class="kv">
+      <div class="k" data-t="wifiApName">Naam van deze camera</div><div class="v"><input class="mono" id="wifiApName" placeholder="bv. Roamcam voorruit" style="width:100%;background:transparent;color:inherit;border:1px solid var(--bd);border-radius:6px;padding:4px 6px;font-size:12px"></div>
       <div class="k" data-t="wifiHomeSsid">Thuis-wifi naam</div><div class="v"><input class="mono" id="wifiHomeSsid" style="width:100%;background:transparent;color:inherit;border:1px solid var(--bd);border-radius:6px;padding:4px 6px;font-size:12px"></div>
       <div class="k" data-t="wifiHomePsk">Thuis-wifi wachtwoord</div><div class="v"><input type="password" class="mono" id="wifiHomePsk" style="width:100%;background:transparent;color:inherit;border:1px solid var(--bd);border-radius:6px;padding:4px 6px;font-size:12px"></div>
       <div class="k" data-t="status">Status</div><div class="v" id="wifiStatus">–</div>
+      <div class="k" data-t="wifiSeen">Thuisnetwerk zichtbaar</div><div class="v" id="wifiSeen">–</div>
+      <div class="k" data-t="wifiClients">Clients op eigen AP</div><div class="v" id="wifiClients">–</div>
       <div class="k" data-t="wifiApPsk">Nieuw AP-wachtwoord</div><div class="v"><input type="password" class="mono" id="wifiApPsk" placeholder="leeg = niet wijzigen" style="width:100%;background:transparent;color:inherit;border:1px solid var(--bd);border-radius:6px;padding:4px 6px;font-size:12px"></div>
     </div>
+    <div id="wifiNets" style="margin-top:8px"></div>
     <div style="display:flex;gap:8px;margin-top:10px">
       <button class="ledbtn" id="wifiSave" data-t="loraSaveBtn">Opslaan</button>
-      <button class="ledbtn" id="wifiRetry" data-t="wifiRetryBtn">Nu proberen</button>
+      <button class="ledbtn" id="wifiScan" data-t="wifiScanBtn">Scan nu</button>
+      <button class="ledbtn" id="wifiRetry" data-t="wifiRetryBtn">Nu naar thuis</button>
+      <button class="ledbtn" id="wifiApNow" data-t="wifiApBtn">Nu naar AP</button>
     </div>
-    <div class="muted" style="font-size:11px;margin-top:8px" data-t="wifiNote">Probeert alleen bij het opstarten thuis-wifi te pakken (niet doorlopend, anders valt de eigen AP telkens weg). Lukt dat, dan blijft hij daarop tot je uit bereik rijdt — dan valt hij vanzelf terug op de eigen AP. AP-wachtwoord wijzigen breekt je huidige AP-verbinding meteen als je daarop zit, en overleeft nog geen reboot.</div>
+    <div class="muted" style="font-size:11px;margin-top:8px" data-t="wifiNote">Kijkt elke 30 seconden of het ingestelde thuisnetwerk in bereik is en schakelt dan om — maar nooit terwijl er iemand op de eigen AP zit, en niet in de eerste minuut na opstarten. Valt het thuisnetwerk weg, dan komt hij na twee minuten vanzelf terug op de eigen AP. Bij stroom-uit-en-aan start hij altijd op de eigen AP. AP-wachtwoord wijzigen verbreekt je huidige AP-verbinding en overleeft nog geen herstart.</div>
   </div></div>
 
   <div class="card" data-tab="settings"><h2 data-t="cSecurity">Dashboard-wachtwoord</h2><div class="body">
@@ -3150,6 +3390,11 @@ const I18N={nl:{},en:{
  routeNone:'no route logged (no GPS fix during this trip)',routePts:'points',routeTop:'max',
  ttffLabel:'GPS fix after start',ttffWaiting:'no fix yet',satsSeen:'sat. seen',
  meshHeard:'heard from others',meshSent:'sent',
+ cLoraLog:'LoRa log',clearLog:'clear',logLines:'lines',loraLogEmpty:'nothing logged yet',
+ loraLogNote:'Live. "no answer" means we did transmit but nobody replied — a successful join shows JOIN GELUKT with a DevAddr.',
+ wifiApName:'Name of this camera',wifiPick:'click a network to select it',wifiPicked:'Selected',wifiNetsFound:'networks found',
+ confirmRename:'Rename the own network? Your current connection to the camera will drop.',
+ wifiSeen:'Home network visible',wifiClients:'Clients on own AP',wifiScanBtn:'Scan now',wifiApBtn:'Switch to AP',wifiRetryBtn:'Switch to home',wifiNotScanned:'not scanned yet',yes:'yes',no:'no',wifiNobody:'nobody — may switch',wifiBlocked:'switching blocked',scanning:'scanning…',wifiFound:'Found',wifiNotFound:'Not found',wifiToAp:'Switching to own AP…',wifiTryHome:'Switching started…',confirmApNow:'Switch back to the own AP? If you are connected over the home network you will lose that connection.',confirmHomeNow:'Switch to the home network now? The own AP goes away — if it fails it comes back by itself.',
  timezone:'Time zone',tzNote:'The time zone also sets the names of clips and trips. Daylight saving follows automatically.',
  saved:'Saved',saveFail:'Saving failed',tzSaved:'Time zone set',loraSaved:'Saved',loraSwitching:'switching…',
  wifiSaved:'Network settings saved',secSet:'Password set',secCleared:'Password removed',
@@ -3422,8 +3667,8 @@ async function tickImu(){
 }
 
 // ---- LED-bediening ----
-const LED_NL=[['uit','Uit'],['opname','Opname (ademend rood)'],['gps','GPS-fix (groen=3D)'],['beweging','Beweging / schok'],['temp','CPU-temp'],['snelheid','Snelheid'],['lora','LoRa-status (groen=verbonden)'],['rood','Vaste kleur: rood'],['groen','Vaste kleur: groen'],['blauw','Vaste kleur: blauw'],['geel','Vaste kleur: geel'],['wit','Vaste kleur: wit'],['paars','Vaste kleur: paars']];
-const LED_EN=[['uit','Off'],['opname','Recording (breathing red)'],['gps','GPS fix (green=3D)'],['beweging','Motion / shock'],['temp','CPU temp'],['snelheid','Speed'],['lora','LoRa status (green=joined)'],['rood','Fixed colour: red'],['groen','Fixed colour: green'],['blauw','Fixed colour: blue'],['geel','Fixed colour: yellow'],['wit','Fixed colour: white'],['paars','Fixed colour: purple']];
+const LED_NL=[['uit','Uit'],['opname','Opname (ademend rood)'],['gps','GPS-fix (groen=3D)'],['beweging','Beweging / schok'],['temp','CPU-temp'],['snelheid','Snelheid'],['lora','LoRa-status (groen=verbonden)'],['netwerk','Netwerk (blauw=thuis, paars=eigen AP)'],['rood','Vaste kleur: rood'],['groen','Vaste kleur: groen'],['blauw','Vaste kleur: blauw'],['geel','Vaste kleur: geel'],['wit','Vaste kleur: wit'],['paars','Vaste kleur: paars']];
+const LED_EN=[['uit','Off'],['opname','Recording (breathing red)'],['gps','GPS fix (green=3D)'],['beweging','Motion / shock'],['temp','CPU temp'],['snelheid','Speed'],['lora','LoRa status (green=joined)'],['netwerk','Network (blue=home, purple=own AP)'],['rood','Fixed colour: red'],['groen','Fixed colour: green'],['blauw','Fixed colour: blue'],['geel','Fixed colour: yellow'],['wit','Fixed colour: white'],['paars','Fixed colour: purple']];
 const LED_FNS=LED_NL;
 const LED_SW={uit:'#222',opname:'#ff4d4d',rood:'#ff4d4d',groen:'#3fb950',blauw:'#4dabf7',geel:'#f5d90a',wit:'#eee',paars:'#b197fc',gps:'#3fb950',beweging:'#ff4d4d',temp:'#f5d90a',snelheid:'#4dabf7'};
 function fillLedSelects(){
@@ -3540,28 +3785,85 @@ $('loraMeshTest').onclick=async()=>{
   setTimeout(()=>{$('loraMeshTest').disabled=false;loadLora();},800);
 };
 setInterval(()=>{if(document.querySelector('.tabbtn[data-tab="settings"]').classList.contains('on')){loadLora();loadMomentCal();}},4000);
+// ---- LoRa-logboek, leest live mee op het Live-tabblad ----
+let LORA_LOG_LEN=0;
+async function loadLoraLog(){
+  try{
+    const d=await jget('/lora/log');
+    const L=d.lines||[];
+    const el=$('loraLog');
+    el.textContent=L.length?L.slice(-120).join(String.fromCharCode(10)):tt('loraLogEmpty','nog niets gelogd');
+    if(L.length!==LORA_LOG_LEN){el.scrollTop=el.scrollHeight;LORA_LOG_LEN=L.length;}
+    const joined=L.some(x=>x.includes('JOIN GELUKT'));
+    const p=$('loraLogPill');
+    p.textContent=L.length+' '+tt('logLines','regels');
+    p.className='pill '+(joined?'g':'b');
+  }catch(e){}
+}
+$('loraLogClear').onclick=async()=>{await fetch('/lora/log_clear');LORA_LOG_LEN=0;loadLoraLog();};
+setInterval(()=>{if(document.querySelector('.tabbtn[data-tab="live"]').classList.contains('on'))loadLoraLog();},3000);
+loadLoraLog();
+
 // lopende rit bijwerken terwijl je ernaar kijkt
 setInterval(()=>{if(document.querySelector('.tabbtn[data-tab="terug"]').classList.contains('on'))loadTrips();},10000);
 
 // ---- Thuisnetwerk + dashboard-wachtwoord ----
-let WIFI_LOADED_ONCE=false;
+let WIFI_LOADED_ONCE=false,WIFI_NAME_WAS='';
+function wifiBars(dbm){const n=Math.max(0,Math.min(4,Math.round((dbm+90)/10)));
+  return '█'.repeat(n)+'░'.repeat(4-n);}
+function renderNets(nets){
+  const el=$('wifiNets');
+  if(!nets||!nets.length){el.innerHTML='';return;}
+  el.innerHTML='<div class="muted" style="font-size:11px;margin-bottom:4px">'
+    +tt('wifiPick','klik een netwerk om te kiezen')+'</div>'
+    +nets.map(n=>'<div class="cliprow" style="padding:5px 8px;cursor:pointer" onclick="pickNet('
+      +JSON.stringify(n.ssid).replace(/"/g,'&quot;')+')">'
+      +'<span class="mono" style="min-width:52px">'+wifiBars(n.signal)+'</span>'
+      +'<div class="clipmeta">'+(n.ssid||'(verborgen)')+'</div>'
+      +'<span class="muted" style="font-size:11px">'+n.signal+' dBm'+(n.secure?' · 🔒':'')+'</span>'
+      +'</div>').join('');
+}
+function pickNet(ssid){$('wifiHomeSsid').value=ssid;$('wifiHomePsk').focus();
+  toast(tt('wifiPicked','Gekozen')+': '+ssid);}
 async function loadWifi(){try{const d=await jget('/wifi/status');
   const home=d.mode==='home';
   $('wifiStatus').textContent=(home?tt('wifiOnHome','op thuisnetwerk'):tt('wifiOnAp','op eigen AP'))+' · IP '+(d.current_ip||'–')+(!home&&d.last_error?' — '+d.last_error:'');
   $('wifiPill').textContent=home?tt('wifiOnHome','thuis'):tt('wifiOnAp','AP');
   $('wifiPill').className='pill '+(home?'g':'b');
-  if(!WIFI_LOADED_ONCE){$('wifiHomeSsid').value=d.home_ssid||'';WIFI_LOADED_ONCE=true;}
+  $('wifiSeen').textContent = d.seen==null ? tt('wifiNotScanned','nog niet gescand')
+    : (d.seen ? tt('yes','ja')+(d.signal!=null?' · '+d.signal+' dBm':'') : tt('no','nee'));
+  $('wifiClients').textContent = (d.clients||0)===0 ? tt('wifiNobody','niemand — mag omschakelen')
+    : (d.clients+' · '+tt('wifiBlocked','omschakelen geblokkeerd'));
+  if(!WIFI_LOADED_ONCE){$('wifiHomeSsid').value=d.home_ssid||'';
+    $('wifiApName').value=d.ap_name_custom||'';WIFI_NAME_WAS=d.ap_name_custom||'';
+    $('wifiApName').placeholder=d.ap_name||'';WIFI_LOADED_ONCE=true;}
 }catch(e){}}
+$('wifiScan').onclick=async()=>{
+  $('wifiSeen').textContent=tt('scanning','scannen…');
+  try{const r=await(await fetch('/wifi/scan')).json();
+    renderNets(r.networks);
+    toast((r.networks||[]).length+' '+tt('wifiNetsFound','netwerken gevonden'));
+  }catch(e){}
+  loadWifi();};
+$('wifiApNow').onclick=async()=>{
+  if(!confirm(tt('confirmApNow','Terug naar de eigen AP? Als je nu via het thuisnetwerk verbonden bent, verlies je die verbinding.')))return;
+  await saveWith('/wifi/ap_now',tt('wifiToAp','Terug naar eigen AP…'));setTimeout(loadWifi,4000);};
 $('wifiSave').onclick=async()=>{
   const params=new URLSearchParams();
   if($('wifiHomeSsid').value.trim())params.set('home_ssid',$('wifiHomeSsid').value.trim());
   if($('wifiHomePsk').value)params.set('home_psk',$('wifiHomePsk').value);
   if($('wifiApPsk').value)params.set('ap_psk',$('wifiApPsk').value);
+  const nm=$('wifiApName').value.trim();
+  if(nm!==WIFI_NAME_WAS){
+    if(confirm(tt('confirmRename','De naam van het eigen netwerk wijzigen? Je huidige verbinding met de camera valt daarbij weg.'))){
+      params.set('ap_name',nm);WIFI_NAME_WAS=nm;
+    } else $('wifiApName').value=WIFI_NAME_WAS;
+  }
   await saveWith('/wifi/set?'+params.toString(),tt('wifiSaved','Netwerkinstellingen opgeslagen'));
   $('wifiHomePsk').value='';$('wifiApPsk').value='';
   setTimeout(loadWifi,500);
 };
-$('wifiRetry').onclick=async()=>{$('wifiStatus').textContent=tt('freeing','bezig…');await fetch('/wifi/retry');setTimeout(loadWifi,3000);};
+$('wifiRetry').onclick=async()=>{if(!confirm(tt('confirmHomeNow','Nu naar het thuisnetwerk? Je eigen AP valt daarbij weg — lukt het niet, dan komt hij vanzelf terug.')))return;$('wifiStatus').textContent=tt('freeing','bezig…');await saveWith('/wifi/home_now',tt('wifiTryHome','Omschakelen gestart…'));setTimeout(loadWifi,8000);};
 $('secSave').onclick=async()=>{
   const had=$('secPw').value.length>0;
   if(await saveWith('/security/set?password='+encodeURIComponent($('secPw').value),
@@ -3809,6 +4111,7 @@ if __name__ == "__main__":
     load_lora_settings()
     load_lora_state()
     load_wifi_settings()
+    wifi_apply_ap_name()  # /etc is een RAM-overlay, dus de eigen naam elke start opnieuw zetten
     load_security_settings()
     threading.Thread(target=led_driver, daemon=True).start()
     threading.Thread(target=retention_loop, daemon=True).start()
