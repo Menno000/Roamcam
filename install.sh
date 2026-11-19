@@ -37,6 +37,14 @@ echo "  installed dashboard_boot.sh"
 #    the listed jobs. We register one that (re)starts the dashboard every 30s: this
 #    makes it boot-persistent AND self-healing, without a systemd unit (which would be
 #    wiped by the read-only-root overlay on reboot).
+#
+#    NOTE: no "device" key on purpose. The firmware checks it as
+#      if (config.device && config.device !== CAMERA_TYPE) return;
+#    so a value that doesn't match the camera makes the job silently never run. The stock
+#    cron_config on our HDC contains only "device":"hdc-s" entries, which is exactly why
+#    those never fire there. Leaving the key out skips the check entirely, so this works on
+#    an HDC and an HDC-S alike. (We shipped "device":"hdc" until 2026-11; on any camera whose
+#    type string isn't exactly "hdc", the dashboard never started by itself.)
 python3 - <<'PY'
 import json
 p = "/mnt/data/cron_config"
@@ -48,7 +56,7 @@ except Exception:
     d = []
 d = [j for j in d if j.get("id") != "roamcam"]
 d.append({"id": "roamcam", "cmd": "sh /mnt/data/dashboard_boot.sh",
-          "device": "hdc", "frequency": {"interval": 30000}})
+          "frequency": {"interval": 30000}})
 json.dump(d, open(p, "w"))
 print("  registered autostart in cron_config")
 PY
