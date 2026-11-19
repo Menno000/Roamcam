@@ -18,10 +18,17 @@ if [ ! -f "$SRC/dashboard_server.py" ]; then
   echo "ERROR: dashboard_server.py not found next to install.sh." >&2
   exit 1
 fi
+if [ ! -f "$SRC/roamcam_core.py" ]; then
+  echo "ERROR: roamcam_core.py not found next to install.sh. The dashboard needs it." >&2
+  exit 1
+fi
 
-# 1. the app -> persistent storage
+# 1. the app and the shared core -> persistent storage
+#    The core must sit in /mnt/data: that is where the dashboard looks for it, and it is the
+#    only place on this device that survives a reboot.
 cp "$SRC/dashboard_server.py" "$DATA/dashboard_server.py"
-echo "  installed dashboard_server.py"
+cp "$SRC/roamcam_core.py" "$DATA/roamcam_core.py"
+echo "  installed dashboard_server.py + roamcam_core.py"
 
 # 2. boot/watchdog script: starts the dashboard if it isn't already running
 cat > "$DATA/dashboard_boot.sh" <<'EOF'
