@@ -2,7 +2,7 @@
 # Hivemapper HDC - lokaal "alles-in-1" dashboard
 # Draait op het toestel zelf, serveert de pagina + proxy naar de lokale API (:5000) + systeeminfo.
 import json, os, socket, subprocess, urllib.request, glob, math, sqlite3, time, threading, calendar, re
-import struct, fcntl, ctypes
+import struct, fcntl, ctypes, sys
 from urllib.parse import urlparse, parse_qs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -21,6 +21,13 @@ SERVICES = [
 ]
 
 
+# De kern staat op het toestel in /mnt/data; in de repo ligt de kopie hiernaast.
+for _p in ("/mnt/data", os.path.dirname(os.path.abspath(__file__))):
+    if os.path.exists(os.path.join(_p, "roamcam_core.py")) and _p not in sys.path:
+        sys.path.insert(0, _p)
+import roamcam_core as core  # noqa: E402
+
+
 def read(path, default=""):
     try:
         with open(path) as f:
@@ -30,12 +37,15 @@ def read(path, default=""):
 
 
 def sh(cmd, timeout=6):
-    # timeout instelbaar: een wifi-scan duurt regelmatig langer dan 6 s en gaf dan stilletjes
-    # lege uitvoer terug -- wat zich voordeed als "geen netwerken gevonden".
-    try:
-        return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout).stdout.strip()
-    except Exception:
-        return ""
+    """Gaat via de gedeelde kern. De timeout blijft instelbaar: een wifi-scan duurt regelmatig
+    langer dan zes seconden en gaf dan stil lege uitvoer terug, wat zich voordeed als
+    "geen netwerken gevonden".
+
+    De kern lost daar bovenop iets op wat deze versie niet kon: subprocess.run(timeout=) breekt
+    alleen de shell af en blijft alsnog wachten op kleinkinderen, dus op alles met een pijp of
+    een omleiding. De kern breekt de hele procesgroep af.
+    """
+    return core.sh(cmd, timeout)
 
 
 def cpu_usage():
@@ -254,42 +264,17 @@ UI_DEFAULT = {"lang": "en", "units": "kmh", "hide_short_trips": True, "tz": "UTC
 
 
 def apply_tz():
-    # Het toestel staat af-fabriek op UTC, dus alles wat het zelf schrijft (clipnamen, ritnamen,
-    # de tijd in de GPS-ondertitels) liep in de zomer twee uur achter op de klok in de auto.
-    # Via de TZ-variabele erven ook libcamera/ffmpeg dit, zodat bestandsnamen meteen kloppen.
-    # /etc staat op een RAM-overlay en is na een herstart weer leeg, vandaar bij elke start.
-    tz = ui_cfg.get("tz") or "UTC"
-    os.environ["TZ"] = tz
-    try:
-        time.tzset()
-    except Exception:
-        pass
+    """Zie de kern voor de uitleg: zonder dit schrijft het toestel alles in UTC weg."""
+    core.apply_tz(ui_cfg.get("tz"))
 ui_cfg = dict(UI_DEFAULT)
 
 
 def load_ui_settings():
-    try:
-        d = json.load(open(LED_SETTINGS_PATH))
-        if isinstance(d.get("ui"), dict):
-            for k in UI_DEFAULT:
-                if k in d["ui"]:
-                    ui_cfg[k] = d["ui"][k]
-    except Exception:
-        pass
+    core.load_section(LED_SETTINGS_PATH, "ui", UI_DEFAULT, target=ui_cfg)
 
 
 def save_ui_settings():
-    try:
-        d = {}
-        try:
-            d = json.load(open(LED_SETTINGS_PATH))
-        except Exception:
-            pass
-        d["ui"] = dict(ui_cfg)
-        with open(LED_SETTINGS_PATH, "w") as f:
-            json.dump(d, f)
-    except Exception:
-        pass
+    core.save_section(LED_SETTINGS_PATH, "ui", dict(ui_cfg))
 
 
 def clip_locked(path):
@@ -306,28 +291,11 @@ def lock_clip(path, why="manual"):
 
 
 def load_rec_settings():
-    try:
-        d = json.load(open(LED_SETTINGS_PATH))
-        if isinstance(d.get("rec"), dict):
-            for k in REC_DEFAULT:
-                if k in d["rec"]:
-                    rec_cfg[k] = d["rec"][k]
-    except Exception:
-        pass
+    core.load_section(LED_SETTINGS_PATH, "rec", REC_DEFAULT, target=rec_cfg)
 
 
 def save_rec_settings():
-    try:
-        d = {}
-        try:
-            d = json.load(open(LED_SETTINGS_PATH))
-        except Exception:
-            pass
-        d["rec"] = {k: rec_cfg[k] for k in REC_DEFAULT}
-        with open(LED_SETTINGS_PATH, "w") as f:
-            json.dump(d, f)
-    except Exception:
-        pass
+    core.save_section(LED_SETTINGS_PATH, "rec", {k: rec_cfg[k] for k in REC_DEFAULT})
 
 
 def recorder_running():
@@ -347,14 +315,6 @@ LIVE_W, LIVE_H, LIVE_FPS = 640, 360, 10
 live_state = {"enabled": False, "frame": None, "viewers": 0, "fed": 0, "frames": 0}
 live_proc = None
 live_lock = threading.Lock()
-
-
-def live_pick_source():
-    files = glob.glob(LIVE_TAIL_GLOB)
-    if len(files) < 2:
-        return None
-    files.sort(key=os.path.getmtime)
-    return files[-2]  # niet de nieuwste (wordt nog beschreven), wel de meest recente afgeronde
 
 
 def live_stream_start():
@@ -678,13 +638,8 @@ trip_state = {"id": None, "start": 0.0, "last_flush": 0.0, "distance_m": 0.0,
               "moments": [], "zero_to_100": []}
 
 
-def _haversine_m(lat1, lon1, lat2, lon2):
-    r = 6371000.0
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dl = math.radians(lon2 - lon1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
-    return 2 * r * math.asin(min(1.0, math.sqrt(a)))
+# Afstand in meters -- uit de gedeelde kern, getest tegen analytisch bekende gevallen.
+_haversine_m = core.haversine
 
 
 def _moment_rec(t, g, dev, base, thr):
@@ -887,15 +842,8 @@ def clock_is_sane():
 
 
 def clock_restore():
-    # Alleen ingrijpen als de klok overduidelijk nergens op slaat; nooit een goede tijd overschrijven.
-    if clock_is_sane():
-        return
-    try:
-        saved = float(open(CLOCK_FILE).read().strip())
-    except Exception:
-        return
-    if saved > time.time():
-        sh('date -u -s "%s" 2>/dev/null' % time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(saved)))
+    """Alleen ingrijpen als de klok nergens op slaat; nooit een goede tijd overschrijven."""
+    core.clock_restore(CLOCK_FILE)
 
 
 def gps_time_sync():
@@ -1407,84 +1355,10 @@ def meshtastic_send_text(text, channel=0):
         s.close()
 
 
-_LORA_SBOX = [
-0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5,0x30,0x01,0x67,0x2b,0xfe,0xd7,0xab,0x76,
-0xca,0x82,0xc9,0x7d,0xfa,0x59,0x47,0xf0,0xad,0xd4,0xa2,0xaf,0x9c,0xa4,0x72,0xc0,
-0xb7,0xfd,0x93,0x26,0x36,0x3f,0xf7,0xcc,0x34,0xa5,0xe5,0xf1,0x71,0xd8,0x31,0x15,
-0x04,0xc7,0x23,0xc3,0x18,0x96,0x05,0x9a,0x07,0x12,0x80,0xe2,0xeb,0x27,0xb2,0x75,
-0x09,0x83,0x2c,0x1a,0x1b,0x6e,0x5a,0xa0,0x52,0x3b,0xd6,0xb3,0x29,0xe3,0x2f,0x84,
-0x53,0xd1,0x00,0xed,0x20,0xfc,0xb1,0x5b,0x6a,0xcb,0xbe,0x39,0x4a,0x4c,0x58,0xcf,
-0xd0,0xef,0xaa,0xfb,0x43,0x4d,0x33,0x85,0x45,0xf9,0x02,0x7f,0x50,0x3c,0x9f,0xa8,
-0x51,0xa3,0x40,0x8f,0x92,0x9d,0x38,0xf5,0xbc,0xb6,0xda,0x21,0x10,0xff,0xf3,0xd2,
-0xcd,0x0c,0x13,0xec,0x5f,0x97,0x44,0x17,0xc4,0xa7,0x7e,0x3d,0x64,0x5d,0x19,0x73,
-0x60,0x81,0x4f,0xdc,0x22,0x2a,0x90,0x88,0x46,0xee,0xb8,0x14,0xde,0x5e,0x0b,0xdb,
-0xe0,0x32,0x3a,0x0a,0x49,0x06,0x24,0x5c,0xc2,0xd3,0xac,0x62,0x91,0x95,0xe4,0x79,
-0xe7,0xc8,0x37,0x6d,0x8d,0xd5,0x4e,0xa9,0x6c,0x56,0xf4,0xea,0x65,0x7a,0xae,0x08,
-0xba,0x78,0x25,0x2e,0x1c,0xa6,0xb4,0xc6,0xe8,0xdd,0x74,0x1f,0x4b,0xbd,0x8b,0x8a,
-0x70,0x3e,0xb5,0x66,0x48,0x03,0xf6,0x0e,0x61,0x35,0x57,0xb9,0x86,0xc1,0x1d,0x9e,
-0xe1,0xf8,0x98,0x11,0x69,0xd9,0x8e,0x94,0x9b,0x1e,0x87,0xe9,0xce,0x55,0x28,0xdf,
-0x8c,0xa1,0x89,0x0d,0xbf,0xe6,0x42,0x68,0x41,0x99,0x2d,0x0f,0xb0,0x54,0xbb,0x16]
-_LORA_RCON = [0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80,0x1b,0x36]
-
-
-def _lora_xtime(a):
-    a <<= 1
-    if a & 0x100:
-        a ^= 0x11b
-    return a & 0xff
-
-
-def _lora_key_expansion(key):
-    Nk = 4
-    w = [list(key[4*i:4*i+4]) for i in range(Nk)]
-    for i in range(Nk, 44):
-        temp = list(w[i - 1])
-        if i % Nk == 0:
-            temp = temp[1:] + temp[:1]
-            temp = [_LORA_SBOX[b] for b in temp]
-            temp[0] ^= _LORA_RCON[i // Nk - 1]
-        w.append([w[i - Nk][j] ^ temp[j] for j in range(4)])
-    return w
-
-
-def lora_aes128_encrypt_block(key, block16):
-    w = _lora_key_expansion(key)
-    state = [[block16[r + 4 * c] for c in range(4)] for r in range(4)]
-
-    def add_round_key(state, rk):
-        for c in range(4):
-            for r in range(4):
-                state[r][c] ^= rk[c][r]
-
-    def sub_bytes(state):
-        for r in range(4):
-            for c in range(4):
-                state[r][c] = _LORA_SBOX[state[r][c]]
-
-    def shift_rows(state):
-        for r in range(1, 4):
-            state[r] = state[r][r:] + state[r][:r]
-
-    def mix_columns(state):
-        for c in range(4):
-            a = [state[r][c] for r in range(4)]
-            state[0][c] = _lora_xtime(a[0]) ^ (_lora_xtime(a[1]) ^ a[1]) ^ a[2] ^ a[3]
-            state[1][c] = a[0] ^ _lora_xtime(a[1]) ^ (_lora_xtime(a[2]) ^ a[2]) ^ a[3]
-            state[2][c] = a[0] ^ a[1] ^ _lora_xtime(a[2]) ^ (_lora_xtime(a[3]) ^ a[3])
-            state[3][c] = (_lora_xtime(a[0]) ^ a[0]) ^ a[1] ^ a[2] ^ _lora_xtime(a[3])
-
-    add_round_key(state, w[0:4])
-    for rnd in range(1, 10):
-        sub_bytes(state); shift_rows(state); mix_columns(state)
-        add_round_key(state, w[4*rnd:4*rnd+4])
-    sub_bytes(state); shift_rows(state)
-    add_round_key(state, w[40:44])
-
-    out = bytearray(16)
-    for c in range(4):
-        for r in range(4):
-            out[r + 4*c] = state[r][c]
-    return bytes(out)
+# AES-128 komt uit de gedeelde kern, getoetst aan de officiele vectoren uit FIPS-197
+# bijlage B en C.1. Hier stond een eigen kopie van 69 regels, byte-voor-byte dezelfde als
+# die in de basis-rol -- een fout in de ene helft zou niet opvallen zolang de andere werkt.
+lora_aes128_encrypt_block = core.aes128_encrypt_block
 
 
 def _lora_shift_left_1(b):
@@ -1782,28 +1656,11 @@ def _lora_build_uplink(nwkskey, appskey, devaddr, fcnt, fport, payload):
 
 
 def load_lora_settings():
-    try:
-        d = json.load(open(LED_SETTINGS_PATH))
-        if isinstance(d.get("lora"), dict):
-            for k in LORA_DEFAULT:
-                if k in d["lora"]:
-                    lora_cfg[k] = d["lora"][k]
-    except Exception:
-        pass
+    core.load_section(LED_SETTINGS_PATH, "lora", LORA_DEFAULT, target=lora_cfg)
 
 
 def save_lora_settings():
-    try:
-        d = {}
-        try:
-            d = json.load(open(LED_SETTINGS_PATH))
-        except Exception:
-            pass
-        d["lora"] = dict(lora_cfg)
-        with open(LED_SETTINGS_PATH, "w") as f:
-            json.dump(d, f)
-    except Exception:
-        pass
+    core.save_section(LED_SETTINGS_PATH, "lora", dict(lora_cfg))
 
 
 def lora_loop():
@@ -1972,28 +1829,11 @@ WIFI_MIN_SIGNAL_DBM = -78
 
 
 def load_wifi_settings():
-    try:
-        d = json.load(open(LED_SETTINGS_PATH))
-        if isinstance(d.get("wifi"), dict):
-            for k in WIFI_DEFAULT:
-                if k in d["wifi"]:
-                    wifi_cfg[k] = d["wifi"][k]
-    except Exception:
-        pass
+    core.load_section(LED_SETTINGS_PATH, "wifi", WIFI_DEFAULT, target=wifi_cfg)
 
 
 def save_wifi_settings():
-    try:
-        d = {}
-        try:
-            d = json.load(open(LED_SETTINGS_PATH))
-        except Exception:
-            pass
-        d["wifi"] = dict(wifi_cfg)
-        with open(LED_SETTINGS_PATH, "w") as f:
-            json.dump(d, f)
-    except Exception:
-        pass
+    core.save_section(LED_SETTINGS_PATH, "wifi", dict(wifi_cfg))
 
 
 def wifi_ap_clients():
@@ -2226,26 +2066,11 @@ def hash_dash_password(pw):
 
 
 def load_security_settings():
-    try:
-        d = json.load(open(LED_SETTINGS_PATH))
-        if isinstance(d.get("security"), dict) and "dash_pw_hash" in d["security"]:
-            security_cfg["dash_pw_hash"] = d["security"]["dash_pw_hash"]
-    except Exception:
-        pass
+    core.load_section(LED_SETTINGS_PATH, "security", SECURITY_DEFAULT, target=security_cfg)
 
 
 def save_security_settings():
-    try:
-        d = {}
-        try:
-            d = json.load(open(LED_SETTINGS_PATH))
-        except Exception:
-            pass
-        d["security"] = dict(security_cfg)
-        with open(LED_SETTINGS_PATH, "w") as f:
-            json.dump(d, f)
-    except Exception:
-        pass
+    core.save_section(LED_SETTINGS_PATH, "security", security_cfg)
 
 
 class H(BaseHTTPRequestHandler):
