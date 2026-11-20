@@ -385,20 +385,24 @@ def gps_read(path=GPS_LATEST):
     return load_json(path, {})
 
 
-def gps_is_live(path=GPS_LATEST, tries=6, pause=0.4):
+def gps_is_live(path=GPS_LATEST, tries=6, pause=0.4, reader=None):
     """Geeft een VERSE GPS-regel terug, of None.
 
     Nodig omdat `latest.log` een stroomonderbreking overleeft: vlak na het opstarten lees je de
     positie en de tijd van vóór de vorige keer uitzetten. Dat kostte ons een klok die 25 seconden
     verkeerd stond. Twee keer lezen en eisen dat het tijdstempel verandert bewijst dat de
     datalogger echt aan het schrijven is.
+
+    `reader` is er voor programma's die hun eigen verrijkte lezer hebben (de reis-rol zet er
+    `fix_ok`, `kmh` en het aantal satellieten bij). Die krijgt het pad als enige argument.
     """
-    eerst = gps_read(path)
+    lees = reader or (lambda p: gps_read(p))
+    eerst = lees(path)
     if not eerst:
         return None
     for _ in range(tries):
         time.sleep(pause)
-        nu = gps_read(path)
+        nu = lees(path)
         if nu and nu.get("timestamp") != eerst.get("timestamp"):
             return nu
     return None
